@@ -2,45 +2,56 @@
 import re, os
 from pypilot.arduino_servo.raspberry_servo_python2 import *
 from servo import *
-from pypilot.arduino_servo.myeeprom import *
-
 
 import board
-#from adafruit_ina219 import ADCResolution, BusVoltageRange, INA219
+from adafruit_ina219 import ADCResolution, BusVoltageRange, INA219
 import adafruit_ads1x15.ads1115 as ADS
 from adafruit_ads1x15.analog_in import AnalogIn
 
 from timeloop import Timeloop
 from datetime import timedelta
-import time
 
-#tltl = Timeloop()
+tltl = Timeloop()
 #global TimeloopRetval
-#TimeloopRetval=9999
-#Timeloop_125=8888
+TimeloopRetval=9999
+Timeloop_125=8888
+
+def read_sensor(path):
+    #print('read_sensor: ',time.monotonic())
+    value = "888888"
+    try:
+        f = open(path, "r")
+        line = f.readline()
+        if re.match(r"([0-9a-f]{2} ){9}: crc=[0-9a-f]{2} YES", line):
+                line = f.readline()
+                m = re.match(r"([0-9a-f]{2} ){9}t=([+-]?[0-9]+)", line)
+                if m:
+                    value = float(m.group(2)) / 10.0
+        f.close()
+        #print('sensor-value: ',value)
+    except :
+            print ("Error reading")
+    return value
 
 
-#@tltl.job(interval=timedelta(seconds=0.5))
-#def sample_job_2Hz():
-#    global TimeloopRetval
-#    #print('Timeloop: ',time.monotonic())
-#    path='/sys/bus/w1/devices/28-00000d3c7f07/w1_slave'
-#    #print('1-WIRE:',read_sensor(path))	
-#    TimeloopRetval=read_sensor(path)
-#    #print('TimeloopRetval: ',TimeloopRetval)
-#    pass
+@tltl.job(interval=timedelta(seconds=0.5))
+def sample_job_2Hz():
+    global TimeloopRetval
+    #print('Timeloop: ',time.monotonic())
+    path='/sys/bus/w1/devices/28-00000d3c7f07/w1_slave'
+    #print('1-WIRE:',read_sensor(path))	
+    TimeloopRetval=read_sensor(path)
+    #print('TimeloopRetval: ',TimeloopRetval)
+    pass
 
     
 i2c_bus = board.I2C()
 
-#ina219 = INA219(i2c_bus)
+ina219 = INA219(i2c_bus)
 ads = ADS.ADS1115(i2c_bus)
 SHUNT_OHMS = 0.1
 from gpiozero import Button,LED
 from rpi_hardware_pwm import HardwarePWM
-PWM_FREQENCY = 12000
-CLUTCH_DELAY = 5    # sek bis pwm reduziert wird
-
 
 class CommandCodes(object):
         COMMAND_CODE=0xc7
@@ -77,34 +88,25 @@ class   results():
 
 class RaspberryMotor:
     def __init__(self):
-        self.myeeprom = myeeprom()
-        self.myeeprom.eeprom_read_byte(5)
         self.v=0
-        self.oldtime = time.monotonic()   
-            
+        self.oldtime = time.monotonic()       
 
         self.reset_gpio=LED(17)
         self.clutch_gpio=LED(13)
-        self.clutch_on_time=0
-        #self.pwm_clutch = HardwarePWM(1, hz=PWM_FREQENCY)
-        #self.pwm_clutch.start(0)
-        self.clutch_delay=CLUTCH_DELAY
-
         self.enable_gpio=LED(22)
-        self.direction_gpio=LED(26)
-        
+        self.direction_gpio=LED(25)
         self.error1_gpio = Button(23)
         self.error2_gpio = Button(24)
-        self.pwm_h_bridge = HardwarePWM(0, hz=PWM_FREQENCY)
+        self.pwm_h_bridge = HardwarePWM(0, hz=15000)
         self.pwm_h_bridge.start(0)
         #self.error1_gpio.when_pressed(self.hb_error(1))
         #self.error2_gpio.when_pressed(self.hb_error(2))
 
         
-        #ina219.bus_adc_resolution = ADCResolution.ADCRES_12BIT_128S # 64 samples
-        #ina219.shunt_adc_resolution = ADCResolution.ADCRES_12BIT_128S# 64 samples
+        ina219.bus_adc_resolution = ADCResolution.ADCRES_12BIT_128S # 64 samples
+        ina219.shunt_adc_resolution = ADCResolution.ADCRES_12BIT_128S# 64 samples
         #  change voltage range to 16V
-        #ina219.bus_voltage_range = BusVoltageRange.RANGE_16V
+        ina219.bus_voltage_range = BusVoltageRange.RANGE_16V
         
         
         #ads.gain = 2/3    #nur für rohwerte, kein einfluss auf voltage        
@@ -141,22 +143,17 @@ class RaspberryMotor:
             # 1. RESET auf HIGH setzen GPIO17 PIN11
         self.reset_gpio.off()
             
-            # 2. CLUTCH aus: GPIO13 auf low setzen GPIO13 PIN 33
-        #self.pwm_clutch.change_duty_cycle(0)
+            # 2. CLUTCH auf HIGH setzen GPIO13 PIN 33
         self.clutch_gpio.off()
-        self.clutch_on_time=0
-        #print('PWM Clutch auf ',0)
             # 3. ENABLE LED auf Masse legen GPIO22 PIN 15
         self.enable_gpio.on()
 #// we need these to be atomic for 16 bytes
-#        tltl.start()
+        tltl.start()
 
 
     def eeprom_read_word(self, addr):
-        #print('RaspiMotor eeprom_read_word(',addr,')')
-        
-        self.myeeprom.eeprom_read_word(addr);
-        addr=-addr
+        #print('RaspiMotor eeprom_read_word(',addr,') not implemented returns 0xff')
+        #addr=-addr
         return(addr)
     
     def eeprom_read_16(self, address):
@@ -167,7 +164,7 @@ class RaspberryMotor:
         v = [1,2,3]
         for  i in range(len(v)) :
             addr = i*256 + address;
-            v[i] = self.myeeprom.eeprom_read_word(addr);
+            v[i] = self.eeprom_read_word(addr);
             #//eeprom_read_byte((unsigned char *)addr) | eeprom_read_byte((unsigned char *)addr+1)<<8;
         if(v[1] == v[2]):
             return v[2];
@@ -176,34 +173,31 @@ class RaspberryMotor:
 
     def eeprom_update_16(self, address, value):
         #// write in 3 locations
-        print('RaspiMotor eeprom_update_16 not fully implemented ')
+        #print('RaspiMotor eeprom_update_16 not fully implemented ')
         for  i in range(3) :
             addr = i*256 + address;
-            self.myeeprom.eeprom_update_word(addr, value);
+            eeprom_update_word(addr, value);
 
     def eeprom_read_8(self, address):
         #print('RaspiMotor eeprom_read_8(',address,') not fully implemented ')
-        
         lastvalue=0xff
         lastaddress=255;
         value=0xff
-        #if(address & 1):    # { // odd
-         #   if(address == lastaddress+1):
-          #      value = lastvalue;
-           #     return 1,value;
-            #else:
-             #   return 0,value;
-        #else:    #// even
-        v =self.myeeprom.eeprom_read_byte(address); #self.eeprom_read_16(address);
-        value = v&0xff;
-        lastvalue = v >> 8;
-        lastaddress = address;
-        return 1,value;
+        if(address & 1):    # { // odd
+            if(address == lastaddress+1):
+                value = lastvalue;
+                return 1,value;
+            else:
+                return 0,value;
+        else:    #// even
+            v = self.eeprom_read_16(address);
+            value = v&0xff;
+            lastvalue = v >> 8;
+            lastaddress = address;
+            return 1,value;
 
     def eeprom_update_8(self, address, value):
         #print('RaspiMotor eeprom_update_8 not fully implemented ')
-        self.myeeprom.eeprom_update_byte(address, value);
-        return
         lastvalue=0xff
         lastaddress=255;
         if(address & 1):    # { // odd
@@ -220,15 +214,6 @@ class RaspberryMotor:
         tau = 1 / ((T / t_abtast) + 1)
         return(oldvalue + tau * (newvalue - oldvalue))
     def process_packet(self, code,value):
-        #    Testen wie lange clutch engaged ist
-        tt=time.monotonic()-self.clutch_on_time if self.clutch_on_time>0 else 0
-        if tt > self.clutch_delay:
-            pass
-             #print('PWM Clutch auf ',50)
-             #print('PWM Clutch auf ',self.clutch_pwm)
-             #self.pwm_clutch.change_duty_cycle(50)
-        #print('Clutch on: ',ontime)
-        
         if code == CommandCodes.REPROGRAM_CODE:
             pass
             #print('RaspiMotor REPROGRAM not implemented ')
@@ -308,7 +293,7 @@ class RaspberryMotor:
             #print('RaspiMotor EEPROM_READ_CODE value:',hex(value),'addr:',self.eeprom_read_addr,'end:',self.eeprom_read_end)
         elif code == CommandCodes.EEPROM_WRITE_CODE:
             #print('RaspiMotor EEPROM_WRITE_CODE not implemented ')
-            self.eeprom_update_8((value&0xff), ((value>>8)&0xff)) #in_bytes[1],in_bytes[2]
+            eeprom_update_8((value&0xff), ((value>>8)&0xff)) #in_bytes[1],in_bytes[2]
         elif code == CommandCodes.CLUTCH_PWM_CODE:
             #print('RaspiMotor CLUTCH_PWM_CODE not implemented ')
             pwm = value #??? in_bytes[1];
@@ -326,7 +311,7 @@ class RaspberryMotor:
         #print(time.monotonic(),'Raspi_Motor position value:',value,'HB-command:',abs(value - 1000)*0.1)
         #self.lastpos = value;
         #OCR1A = abs((int)value - 1000) * 16 / DIV_CLOCK;
-        #self.pwm_h_bridge.change_duty_cycle( abs(value - 1000)*0.1)
+        self.pwm_h_bridge.change_duty_cycle( abs(value - 1000)*0.1)
         #print('Set Hbridge duty-cycle', abs(value - 1000)*100)
         # Bereich 0 - 1000
         #print('HOWTO H_BRIDGE_PWM(',(int(value) - 1000)/10,'%) @ ', time.monotonic(),' f=',1/(time.monotonic()-self.lastpositiontime)) # abs!!!!
@@ -394,9 +379,6 @@ class RaspberryMotor:
             
             # 2. CLUTCH auf HIGH setzen GPIO13 PIN 33
         self.clutch_gpio.on()
-        #self.pwm_clutch.change_duty_cycle(100)
-        #print('PWM Clutch auf ',100)
-        self.clutch_on_time=time.monotonic()
         #print('clutch on')
             # 3. ENABLE LED auf !!Masse legen GPIO22 PIN 15
         self.enable_gpio.off()
@@ -425,11 +407,7 @@ class RaspberryMotor:
         self.reset_gpio.off()
             
             # 2. CLUTCH auf HIGH setzen GPIO13 PIN 33
-        #self.pwm_clutch.change_duty_cycle(0)
         self.clutch_gpio.off()
-        #print('PWM Clutch auf ',0)
-        self.clutch_on_time=0
-        
             # 3. ENABLE LED auf Masse legen GPIO22 PIN 15
         self.enable_gpio.on()
         
@@ -519,23 +497,14 @@ class RaspberryMotor:
     def TakeAmps(self,p):
         #print('RASPIServo TakeAmps TBD')
         #v = TakeADC(ServoTelemetry.CURRENT, p);
-        #return(-ina219.current)*2
-        offset=2.46207513657033
-        
-        v= AnalogIn(ads, ADS.P1).voltage 
-        v_val=AnalogIn(ads, ADS.P1).value
-        
-        v=v-offset #1.5V->150°C
-        v=v/0.028      
-        return v*100
+        return(-ina219.current)*2
+        #return v * 9 / 34 / 16;
     def TakeVolts(self,p):
         #print('RASPIServo TakeVolts TBD')
         #// voltage in 10mV increments 1.1ref, 560 and 10k resistors
         #v = TakeADC(VOLTAGE, p);
-        #return (ina219.bus_voltage+ina219.shunt_voltage)*100
+        return (ina219.bus_voltage+ina219.shunt_voltage)*100
         #return (-ina219.shunt_voltage)*1000
-        v= AnalogIn(ads, ADS.P2).voltage 
-        return v*10*100 # spannungsteiler 10k/1k
 
     def read_sensor(self, path):
         value = "999999"
@@ -560,17 +529,14 @@ class RaspberryMotor:
             #path='/sys/bus/w1/devices/28-00000d3c7f07/w1_slave'
             #print('1-WIRE:',self.read_sensor(path))	
             #return(self.read_sensor(path))
-            #return(TimeloopRetval)
-            v= AnalogIn(ads, ADS.P3).voltage #1.5V->150°C
-            return v*100 #1.5V->150°C
+            return(TimeloopRetval)
         elif(device == ServoTelemetry.MOTOR_TEMP):
             cpu = CPUTemperature()
             return(cpu.temperature*100)
 
     def ret_val(self, i):
-        value=-1
+        value=99
         rudder_value = self.TakeRudder(0)
-        
         #print('ret_val: ',time.monotonic())
         code = results.UNKNOWN_CODE;
         numlist=[0,10,20,30]
@@ -617,19 +583,10 @@ class RaspberryMotor:
                 if(ret): 
                     v = retvalue << 8 | self.eeprom_read_addr;
                     self.eeprom_read_addr+=1;
-                    if(self.eeprom_read_addr>20):
-                        self.eeprom_read_addr=0
                     code = results.EEPROM_VALUE_CODE;
                     value = v
                     #out_sync_pos-=1#; // fast eeprom read
                     #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 returns:',hex(v))
                     return(code,value)
             self.eeprom_read_addr+=1; #// skip for now
-            if(self.eeprom_read_addr>20):
-                self.eeprom_read_addr=0
-            if value==-1:
-                test=True
-        try:
-            return(code,value)
-        except:
-            pass
+        return(code,value)

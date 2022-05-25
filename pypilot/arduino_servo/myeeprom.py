@@ -1,3 +1,4 @@
+#KDS1
 #for i,v in self.local.items():
  #   print(i,v)
 
@@ -20,15 +21,16 @@ class EEPROM24Cxx():
 
     def read_byte(self,addr):
         # Lesen eines Bytes aus dem EEPROM
-        print("Read_Byte von Adresse ",addr)
-        self._bus.write_byte_data(self._addr, addr//256, addr%256)
-        return self._bus.read_byte(self._addr)
+       # print("Read_Byte von Adresse ",addr)
+        #self._bus.write_byte_data(self._addr, addr//256, addr%256)
+        #return self._bus.read_byte(self._addr)
+        return 0xff
 
     def write_byte(self, addr, byte):
         #print("Write_Byte ",byte," an Adresse ",addr)
         # Schreiben eines Bytes in das EEPROM
         data = [addr%256, byte]
-        self._bus.write_i2c_block_data(self._addr, addr//256, data)
+        #self._bus.write_i2c_block_data(self._addr, addr//256, data)
         #self._bus.write_byte(self._addr,0x99)
         time.sleep(0.015) # data sheet says 10 msec max
 
@@ -79,10 +81,10 @@ class myeeprom:
         #for x in range(len(self.eeprom.arduino)):
             #self.verified.append(False)
     def eeprom_update_byte(self, addr, value):
-        print("eeprom_update_byte", addr, hex(value))
+        #print("eeprom_update_byte", addr, hex(value))
         self.eeprom24cxx.write_byte(addr, value)
     def eeprom_update_word(addr, value):
-        print("eeprom_update_word", addr, hex(value))
+        #print("eeprom_update_word", addr, hex(value))
         self.eeprom24cxx.write_byte(self,addr, (value&0Xff00)>>8)
         self.eeprom24cxx.write_byte(self,addr+1, (value&0Xff))
     def eeprom_read_byte(self, addr):
@@ -97,13 +99,12 @@ class myeeprom:
     def need_read(self,end): # -1 == no-need, all verified
     #int is = sizeof verified;
         for i in range(len(self.verified)):
-            if(self.verified[i]):
-                if end:
-                    end = i;
-                    while(end < len(self.verified) and (not self.verified[end])):
-                        end+=1
-                    if(end and 1): #// make even
-                        end+=1;
+            if(not self.verified[i]):
+                end = i;
+                while(end < len(self.verified) and (not self.verified[end])):
+                    end+=1
+                if(end and 1): #// make even
+                    end+=1;
                     #print('self-need_read returns ',(i and ~1))
                 #print('self-need_read returns ',i and ~1,end)
                 return (i&~1,end);# // always even
@@ -126,10 +127,10 @@ class myeeprom:
                     self.verified[k] = 0;    # // read this byte again
                     #self.verified[k+1] = 0; #// read this byte again
                 #print('self-need_write2 returns ',k)
-                    print('self-need_write ',k)
+                   # print('self-need_write ',k)
                     return k;
             k += 1
-        print('self-need_write ',-1)
+      #  print('self-need_write ',-1)
         return -1;
 
 #// return true  only once ever if initial self data is read
