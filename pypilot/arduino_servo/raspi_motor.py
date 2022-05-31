@@ -1,6 +1,7 @@
-
 import re, os
-from pypilot.arduino_servo.raspberry_servo_python2 import *
+
+#from pypilot.arduino_servo.raspberry_servo_python2 import servo_serial_data
+#from pypilot.arduino_servo.raspberry_servo_python2 import motor_serial_data
 from servo import *
 from pypilot.arduino_servo.myeeprom import *
 
@@ -12,10 +13,20 @@ from adafruit_ads1x15.analog_in import AnalogIn
 
 from timeloop import Timeloop
 from datetime import timedelta
-import time
+import time, math, multiprocessing, select
+from server import pypilotServer
+from client import pypilotClient
+from pypilot.arduino_servo.crc import *
+from gpiozero import CPUTemperature
+try:
+    from nonblockingpipe import NonBlockingPipe
+except:
+    print("Failed Import")
 
-#tltl = Timeloop()
-#global TimeloopRetval
+globalself=99
+tltl = Timeloop()
+my_self=66
+#global TiSmeloopRetval
 #TimeloopRetval=9999
 #Timeloop_125=8888
 
@@ -40,6 +51,8 @@ from gpiozero import Button,LED
 from rpi_hardware_pwm import HardwarePWM
 PWM_FREQENCY = 12000
 CLUTCH_DELAY = 5    # sek bis pwm reduziert wird
+
+
 
 
 class CommandCodes(object):
@@ -73,16 +86,40 @@ class   results():
 #def hb_error(no):
  #   print('H-Bridge Error ', no)
 
+import threading
 
 
 class RaspberryMotor:
-    def __init__(self):
+    sendbuf=[]
+    receivebuf=[]
+    def __init__(self, server):
+        
+        #self.server = pypilotServer()
+        #self.client = pypilotClient(server)
+        self.multiprocessing = server.multiprocessing
+        #x = threading.Thread(target=self.loop, args=(1,))
+        #x.start()
+        #return
+
+        
+        
+        self.setup()
+        if self.multiprocessing:
+            self.pipe, pipe = NonBlockingPipe('Motor pipe', self.multiprocessing)
+            self.process = multiprocessing.Process(target=self.loop, args=(pipe,), daemon=True)
+            self.process.start()
+            return
+        self.process = False
+        #self.setup()
+
+    def setup(self):
         self.myeeprom = myeeprom()
         self.myeeprom.eeprom_read_byte(5)
         self.v=0
         self.oldtime = time.monotonic()   
             
 
+        self.serial_data_timeout=250
         self.reset_gpio=LED(17)
         self.clutch_gpio=LED(13)
         self.clutch_on_time=0
@@ -135,7 +172,7 @@ class RaspberryMotor:
         self.max_slew_speed = 0
         self.max_slew_slow = 0
         self.clutch_pwm = 0
-        
+        self.currentOffset=2.46207513657033        
         self.lastpositiontime=time.monotonic()
 
             # 1. RESET auf HIGH setzen GPIO17 PIN11
@@ -150,7 +187,16 @@ class RaspberryMotor:
         self.enable_gpio.on()
 #// we need these to be atomic for 16 bytes
 #        tltl.start()
-
+        self.oldtime=time.monotonic()
+        self.out_sync_b=0
+        self.out_sync_pos=0
+        self.serialin=0
+        self.sync_b=0
+        self.in_bytes=[0,0,0,0]
+        self.crcbytes=[0,0,0]
+        self.sendbuf=[]
+        my_self=self
+        #tltl.start()
 
     def eeprom_read_word(self, addr):
         #print('RaspiMotor eeprom_read_word(',addr,')')
@@ -198,7 +244,7 @@ class RaspberryMotor:
         value = v&0xff;
         lastvalue = v >> 8;
         lastaddress = address;
-        return 1,value;
+        return 0,value;#return 1,value;
 
     def eeprom_update_8(self, address, value):
         #print('RaspiMotor eeprom_update_8 not fully implemented ')
@@ -219,7 +265,12 @@ class RaspberryMotor:
         T = 1 / (2*math.pi*f_grenz)
         tau = 1 / ((T / t_abtast) + 1)
         return(oldvalue + tau * (newvalue - oldvalue))
-    def process_packet(self, code,value):
+
+    def process_packet(self):
+        self.flags |= ~ServoFlags.SYNC;
+        value = self.in_bytes[1] | self.in_bytes[2]<<8;
+        code=self.in_bytes[0]
+
         #    Testen wie lange clutch engaged ist
         tt=time.monotonic()-self.clutch_on_time if self.clutch_on_time>0 else 0
         if tt > self.clutch_delay:
@@ -236,6 +287,9 @@ class RaspberryMotor:
             #print('RaspberryServo reset ')
             self.flags &= ~ServoFlags.OVERCURRENT_FAULT
         elif code == CommandCodes.COMMAND_CODE:
+            if(self.serialin < 12):
+                self.serialin+=4; #// output at input rate
+
             self.timeout = 0;
             if(value > 2000):
                 #// unused range, invalid!!!
@@ -282,6 +336,8 @@ class RaspberryMotor:
             self.rudder_max = value;
             
         elif code == CommandCodes.DISENGAGE_CODE:
+            if(self.serialin < 12):
+                self.serialin+=4; #// output at input rate
             self.disengage();
             
         elif code == CommandCodes.MAX_SLEW_CODE:
@@ -321,13 +377,13 @@ class RaspberryMotor:
             print('RaspiMotor unknown CODE: ',code,' in process_packet')
 
 
-             
+           
     def position(self,value):
         #print(time.monotonic(),'Raspi_Motor position value:',value,'HB-command:',abs(value - 1000)*0.1)
         #self.lastpos = value;
         #OCR1A = abs((int)value - 1000) * 16 / DIV_CLOCK;
-        #self.pwm_h_bridge.change_duty_cycle( abs(value - 1000)*0.1)
-        #print('Set Hbridge duty-cycle', abs(value - 1000)*100)
+        self.pwm_h_bridge.change_duty_cycle( abs(value - 1000)*0.1)
+        print('Set Hbridge duty-cycle', abs(value - 1000)*100)
         # Bereich 0 - 1000
         #print('HOWTO H_BRIDGE_PWM(',(int(value) - 1000)/10,'%) @ ', time.monotonic(),' f=',1/(time.monotonic()-self.lastpositiontime)) # abs!!!!
         if(value > 1040):
@@ -520,13 +576,15 @@ class RaspberryMotor:
         #print('RASPIServo TakeAmps TBD')
         #v = TakeADC(ServoTelemetry.CURRENT, p);
         #return(-ina219.current)*2
-        offset=2.46207513657033
+        
         
         v= AnalogIn(ads, ADS.P1).voltage 
         v_val=AnalogIn(ads, ADS.P1).value
-        
-        v=v-offset #1.5V->150°C
-        v=v/0.028      
+        if not (self.flags & ServoFlags.ENGAGED):
+            self.currentOffset = v -0.01*0.16 # -LL-current  0.160A * 0.01V/A
+
+        v=v-self.currentOffset
+        v=v/0.01      # 0.01 V/A
         return v*100
     def TakeVolts(self,p):
         #print('RASPIServo TakeVolts TBD')
@@ -567,69 +625,182 @@ class RaspberryMotor:
             cpu = CPUTemperature()
             return(cpu.temperature*100)
 
-    def ret_val(self, i):
-        value=-1
-        rudder_value = self.TakeRudder(0)
-        
-        #print('ret_val: ',time.monotonic())
-        code = results.UNKNOWN_CODE;
-        numlist=[0,10,20,30]
-        if(i in numlist):
-            if(not self.low_current):
-                self.flags |= ServoFlags.CURRENT_RANGE;
-            self.flags &= ~ServoFlags.REBOOTED;
-            self.flags |= ServoFlags.SYNC
-            value = self.flags
-            code = results.FLAGS_CODE;
-            #print("RaspiMotor ret.code:",ret.code,' value:',ret.value)
-        numlist=[1,4,7,11,14,17,21,24,27,31,34,37,40]
-        if(i in numlist):
-            value = self.current=self.TakeAmps(0);
-            code = results.CURRENT_CODE
-        numlist=[2,  5,  8,  12,  15,  18,  22,  25,  28,  32,  35,  38,  41]
-        if(i in numlist):
-            if(self.rudder_sense == 0):
-                value = self.rudder = 65535   #; // indicate invalid rudder measurement
+    def serial_read(self,buffer):
+            count = 1
+            #if len(buffer>0):
+            a=buffer[0]
+            buffer.pop(0)
+            return a
+    def serial_write2(self,buffer,data,l):
+        for i in range(l):
+            a=len(buffer)
+            if(l == 1):
+                buffer.append(data)
             else:
-                value = self.rudder = rudder_value  #self.TakeRudder(0);
-            code = results.RUDDER_SENSE_CODE
-            #print("RaspiMotor ret.code:",results.RUDDER_SENSE_CODE,' value:',value)
+                buffer.append(data[i])
+        return i
+        
             
-        numlist=[ 3,  13,  23,  33]
-        if(i in numlist):
-            value = self.voltage = self.TakeVolts(0);
-            code = results.VOLTAGE_CODE
-        numlist=[6]
-        if(i in numlist):
-                value = self.controller_temp=self.TakeTemp(ServoTelemetry.CONTROLLER_TEMP);
-                code = results.CONTROLLER_TEMP_CODE
-        numlist=[9]
-        if(i in numlist):
-                value = self.motor_temp = self.TakeTemp(ServoTelemetry.MOTOR_TEMP)
-                code = results.MOTOR_TEMP_CODE
-        numlist=[ 16,  26,  36]            
-        if(i in numlist):
-            #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 read_addr:',self.eeprom_read_addr,'read_end:', self.eeprom_read_end)
-            code = results.EEPROM_VALUE_CODE;
-            if(self.eeprom_read_addr != self.eeprom_read_end):
-                ret,retvalue=self.eeprom_read_8(self.eeprom_read_addr)
-                #print('RASPI_MOTOR EEPROM_VALUE_CODE2 ret:',ret,' retvalue:',retvalue)
-                if(ret): 
-                    v = retvalue << 8 | self.eeprom_read_addr;
-                    self.eeprom_read_addr+=1;
+    #@tltl.job(interval=timedelta(seconds=10), this='that', that='this', other=1)
+    #@tltl.job(interval=timedelta(seconds=0.5),args=69)
+    def loop2(self,loop):
+        i=0
+        while(True):
+            print("loop",i)
+            i+=1
+            time.sleep(0.5)
+            pass
+        #self=my_self
+        #print('Motor process', os.getpid())
+        #if not RTIMU:
+         #   while True:
+          #      time.sleep(10) # do nothing
+
+        #if os.system('sudo chrt -pf 2 %d 2>&1 > /dev/null' % os.getpid()):
+         #   print(_('warning, failed to make Motor process realtime'))
+        #else:
+         #   print(_('made Motor process realtime'))
+
+    def loop(self,loop):
+        #self.setup()
+        t_old = time.monotonic()
+        while(True):
+            print("Motor-Frequenz: ",1/(time.monotonic()-t_old))
+            t_old = time.monotonic()
+            time.sleep(0.02)
+            print("T: ",time.monotonic())
+            i=0
+            value=-1
+            rudder_value = self.TakeRudder(0)
+            
+            #Serial einlesen
+            in_buf=[]
+            print("sendbuf: ",len(self.sendbuf))
+            print("receivebuf: ",len(self.receivebuf))
+
+
+
+
+            #// serial input
+            while(len(self.receivebuf)):
+                  c = self.serial_read(self.receivebuf);#   uint8_t c = Serial.read();
+                  #self.serialin+=c
+                  self.serial_data_timeout = 0;
+                  if(self.sync_b < 3):
+                      self.in_bytes[self.sync_b] = c;
+                      self.sync_b+=1;
+                  else:
+                      d=crc8(self.in_bytes, 3)
+                      if(c == d):    
+                          if(self.in_sync_count >= 2):   # { // if crc matches, we have a valid packet
+                              print("process packet:",self.in_bytes)
+                              self.process_packet();
+                          else:
+                              self.in_sync_count+=1;
+                          self.sync_b = 0;
+                          self.flags &= ~ServoFlags.INVALID;
+                      else: 
+                          #// invalid packet
+                          self.flags &= ~ServoFlags.SYNC;
+                          self.stop();
+                          self.in_sync_count = 0;
+                          self.in_bytes[0] = self.in_bytes[1]; #// shift input 1 byte
+                          self.in_bytes[1] = self.in_bytes[2];
+                          self.in_bytes[2] = c;
+                          self.flags |= ServoFlags.INVALID;
+                      break
+
+            code = results.UNKNOWN_CODE;
+
+            if self.out_sync_b==1 or self.out_sync_b==2 :
+                    #// write next
+                #self.motor_serial.write('??', len('??'));
+                self.serial_write2(self.sendbuf, self.crcbytes[self.out_sync_b],1)
+                #motor_serial_data.write(motor_serial_data.buffer, self.crcbytes[self.out_sync_b],1)
+                #self.motor_serial.write(self.crcbytes[self.out_sync_b],1)
+                #self.serial_write(self.motor_serial.buffer, self.crcbytes[self.out_sync_b],1);
+                self.out_sync_b+=1;
+            elif self.out_sync_b==3 :
+                #// write crc of sync byte plus bytes transmitted
+                a=crc8(self.crcbytes, 3)
+                self.serial_write2(self.sendbuf, crc8(self.crcbytes, 3),1);
+                self.out_sync_b = 0;
+            elif self.out_sync_b==0:
+                self.out_sync_b+=1
+                #// match output rate to input rate
+                #if(self.serialin < 4):
+                 #   break;
+                code = results.UNKNOWN_CODE;
+                #//  flags C R V C R ct C R mt flags  C  R  V  C  R EE  C  R mct flags  C  R  V  C  R  EE  C  R rr flags  C  R  V  C  R EE  C  R cc  C  R vc
+                #//  0     1 2 3 4 5  6 7 8  9    10 11 12 13 14 15 16 17 18  19    20 21 22 23 24 25  26 27 28 29    30 31 32 33 34 35 36 37 38 39 40 41 42
+                #switch(out_sync_pos++) {
+                i=self.out_sync_pos
+                self.out_sync_pos+=1
+                numlist=[0,10,20,30]
+                if(i in numlist):
+                    if(not self.low_current):
+                        self.flags |= ServoFlags.CURRENT_RANGE;
+                    self.flags &= ~ServoFlags.REBOOTED;
+                    self.flags |= ServoFlags.SYNC
+                    value = self.flags
+                    code = results.FLAGS_CODE;
+                    #print("RaspiMotor ret.code:",ret.code,' value:',ret.value)
+                numlist=[1,4,7,11,14,17,21,24,27,31,34,37,40]
+                if(i in numlist):
+                    value = self.current=self.TakeAmps(0);
+                    code = results.CURRENT_CODE
+                numlist=[2,  5,  8,  12,  15,  18,  22,  25,  28,  32,  35,  38,  41]
+                if(i in numlist):
+                    if(self.rudder_sense == 0):
+                        value = self.rudder = 65535   #; // indicate invalid rudder measurement
+                    else:
+                        value = self.rudder = rudder_value  #self.TakeRudder(0);
+                    code = results.RUDDER_SENSE_CODE
+                    #print("RaspiMotor ret.code:",results.RUDDER_SENSE_CODE,' value:',value)
+                    
+                numlist=[ 3,  13,  23,  33]
+                if(i in numlist):
+                    value = self.voltage = self.TakeVolts(0);
+                    code = results.VOLTAGE_CODE
+                numlist=[6]
+                if(i in numlist):
+                        value = self.controller_temp=self.TakeTemp(ServoTelemetry.CONTROLLER_TEMP);
+                        code = results.CONTROLLER_TEMP_CODE
+                numlist=[9]
+                if(i in numlist):
+                        value = self.motor_temp = self.TakeTemp(ServoTelemetry.MOTOR_TEMP)
+                        code = results.MOTOR_TEMP_CODE
+                numlist=[ 16,  26,  36]            
+                if(i in numlist):
+                    #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 read_addr:',self.eeprom_read_addr,'read_end:', self.eeprom_read_end)
+                    code = results.EEPROM_VALUE_CODE;
+                    if(self.eeprom_read_addr != self.eeprom_read_end):
+                        ret,retvalue=self.eeprom_read_8(self.eeprom_read_addr)
+                        #print('RASPI_MOTOR EEPROM_VALUE_CODE2 ret:',ret,' retvalue:',retvalue)
+                        if(ret): 
+                            v = retvalue << 8 | self.eeprom_read_addr;
+                            self.eeprom_read_addr+=1;
+                            if(self.eeprom_read_addr>20):
+                                self.eeprom_read_addr=0
+                            code = results.EEPROM_VALUE_CODE;
+                            value = v
+                            #out_sync_pos-=1#; // fast eeprom read
+                            #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 returns:',hex(v))
+                            return(code,value)
+                    self.eeprom_read_addr+=1; #// skip for now
                     if(self.eeprom_read_addr>20):
                         self.eeprom_read_addr=0
-                    code = results.EEPROM_VALUE_CODE;
-                    value = v
-                    #out_sync_pos-=1#; // fast eeprom read
-                    #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 returns:',hex(v))
-                    return(code,value)
-            self.eeprom_read_addr+=1; #// skip for now
-            if(self.eeprom_read_addr>20):
-                self.eeprom_read_addr=0
-            if value==-1:
-                test=True
-        try:
-            return(code,value)
-        except:
-            pass
+                if value==-1:
+                    test=True
+                else:
+                    i+=1
+                    self.crcbytes[0] = int(code)&0xFF;
+                    self.crcbytes[1] = int(value)&0xFF;
+                    self.crcbytes[2] = int(value)>>8;
+                    self.crcbytes[2]&=0xFF
+
+                #if True:    #t > 0 and t < period:
+                time.sleep(0.1)
+                #else:
+                 #   print(_('Motor process failed to keep time'), dt, t0, t1, t2, t3)
+    

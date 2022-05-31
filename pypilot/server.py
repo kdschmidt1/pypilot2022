@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-#   Copyright (C) 2022 Sean D'Epagnier
+#   Copyright (C) 2020 Sean D'Epagnier
 #
 # This Program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public
@@ -10,15 +10,21 @@
 import select, socket, time
 import sys, os, heapq
 
+if sys.stdout.encoding.lower().startswith('utf'):
+    import gettext
+    locale_d = os.path.abspath(os.path.dirname(__file__)) + '/locale'
+    gettext.translation('pypilot', locale_d, fallback=True).install()
+else:
+    # no translations
+    globals()['_'] = lambda x : x
+
 import numbers
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import gettext_loader
 import pyjson
 from bufferedsocket import LineBufferedNonBlockingSocket
 from nonblockingpipe import NonBlockingPipe
 
 DEFAULT_PORT = 23322
-from zeroconf_service import zeroconf
 max_connections = 30
 configfilepath = os.getenv('HOME') + '/.pypilot/'
 server_persistent_period = 120 # store data every 120 seconds
@@ -206,11 +212,11 @@ class ServerValues(pypilotValue):
         self.internal = list(self.values)
         self.pipevalues = {}
         self.msg = 'new'
-        self.persistent_timeout = time.monotonic() + server_persistent_period
-        self.persistent_values = {}
         self.load()
         self.pqwatches = [] # priority queue of watches
         self.last_send_watches = 0
+        self.persistent_timeout = time.monotonic() + server_persistent_period
+        self.persistent_values = {}
 
     def get_msg(self):
         if not self.msg or self.msg == 'new':
@@ -384,7 +390,7 @@ class ServerValues(pypilotValue):
                 for name in self.persistent_data:
                     file.write(self.persistent_data[name])
                 file.close()
-            except Exception as ke:
+            except Exception as e:
                 print(_('failed to write'), 'pypilot.conf', e)
 
 class pypilotServer(object):
@@ -461,10 +467,9 @@ class pypilotServer(object):
                 self.fd_to_connection[fd] = pipe
                 self.fd_to_pipe[fd] = pipe
             pipe.cwatches = {'values': True} # server always watches client values
+
         self.initialized = True
-        self.zeroconf = zeroconf()
-        self.zeroconf.start()
-            
+
     def __del__(self):
         if not self.initialized:
             return

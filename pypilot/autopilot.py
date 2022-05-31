@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#
+#KDS
 #   Copyright (C) 2021 Sean D'Epagnier
 #
 # This Program is free software; you can redistribute it and/or
@@ -21,6 +21,7 @@ from server import pypilotServer
 from client import pypilotClient
 from values import *
 from boatimu import *
+#from pypilot.arduino_servo.BoatRaspiMotorx import *
 from resolv import *
 import tacking, servo
 from version import strversion
@@ -100,6 +101,8 @@ class Autopilot(object):
         self.server = pypilotServer()
         self.client = pypilotClient(self.server)
         self.boatimu = BoatIMU(self.client)
+        #self.boatmotor = BoatRaspiMotorx(self.client)
+        
         self.sensors = Sensors(self.client, self.boatimu)
         self.servo = servo.Servo(self.client, self.sensors)
         self.version = self.register(Value, 'version', 'pypilot' + ' ' + strversion)
@@ -172,7 +175,7 @@ class Autopilot(object):
         # setup all processes to exit on any signal
         self.childprocesses = [self.boatimu.imu, self.boatimu.auto_cal,
                                self.sensors.nmea, self.sensors.gpsd,
-                               self.sensors.signalk, self.server]
+                               self.sensors.signalk, self.server]   #, self.boatmotor.motor]
         def cleanup(signal_number, frame=None):
             #print('got signal', signal_number, 'cleaning up')
             if signal_number == signal.SIGCHLD:
@@ -345,7 +348,7 @@ class Autopilot(object):
             print(_('sensors is running too _slowly_'), t2-t1)
 
         sp = 0
-        for tries in range(14): # try 14 times to read from imu
+        for tries in range(28): # try 14 times to read from imu
             timu = time.monotonic()
             data = self.boatimu.read()
             if data:
@@ -355,7 +358,7 @@ class Autopilot(object):
             time.sleep(pd10)
 
             #if not data:
-            #print('autopilot failed to read imu at time:', time.monotonic(), period)
+             #   print('autopilot failed to read imu at time:', time.monotonic(), period)
 
         t3 = time.monotonic()
         if t3-t2 > period/2 and data:

@@ -1265,24 +1265,33 @@ void loop()
     }
 
     // serial input
-    while(Serial.available()) {
+    while(Serial.available())
+    {
       uint8_t c = Serial.read();
       serial_data_timeout = 0;
       service_adc();
-      if(sync_b < 3) {
+      if(sync_b < 3)
+      	  {
           in_bytes[sync_b] = c;
           sync_b++;
-      } else {
-          if(c == crc8(in_bytes, 3)) {
-              if(in_sync_count >= 2) { // if crc matches, we have a valid packet
+      	  }
+      else
+      	  {
+          if(c == crc8(in_bytes, 3))
+          	  {
+              if(in_sync_count >= 2)
+              	  { // if crc matches, we have a valid packet
                   process_packet();
                   service_adc();
-              } else
+              	  }
+              else
                   in_sync_count++;
 
               sync_b = 0;
               flags &= ~INVALID;
-          } else {
+          	  }
+          else
+          	  {
               // invalid packet
               flags &= ~SYNC;
               stop();
@@ -1291,9 +1300,9 @@ void loop()
               in_bytes[1] = in_bytes[2];
               in_bytes[2] = c;
               flags |= INVALID;
-          }
+          	  }
           break;
-      }
+      	  }
     }
 
     // test fault pins

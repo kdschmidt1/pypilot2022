@@ -553,7 +553,7 @@ class Servo(object):
                 elif command:
                     if self.driver_timeout_start:
                         if time.monotonic() - self.driver_timeout_start > 1:
-                            print('SERVO: Driver Timeout set')
+                            print('SERVO: Driver Timeout set',time.monotonic() - self.driver_timeout_start)
                             self.flags.setbit(ServoFlags.DRIVER_TIMEOUT)
                     else:
                         self.driver_timeout_start = time.monotonic()
@@ -761,7 +761,8 @@ class Servo(object):
     def load_calibration(self):
         import pyjson
         try:
-            filename = Servo.calibration_filename
+            filename =Servo.calibration_filename
+            
             print(_('loading servo calibration'), filename)
             file = open(filename)
             self.calibration.set(pyjson.loads(file.readline()))

@@ -14,6 +14,7 @@
 
 import os, sys
 import time, math, multiprocessing, select
+import socket
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -382,6 +383,8 @@ class BoatIMU(object):
         sensornames += directional_sensornames
     
         self.SensorValues = {}
+        self.valhdm=999.0
+        self.valrot=666.0
         for name in sensornames:
             self.SensorValues[name] = self.register(SensorValue, name, directional = name in directional_sensornames)
 
@@ -393,6 +396,11 @@ class BoatIMU(object):
 
         self.last_imuread = time.monotonic() + 4 # ignore failed readings at startup
         self.cal_data = False
+        try:
+            self.sock=socket.create_connection(('192.168.2.68',8881),10)
+        except:
+            self.sock=0
+            pass
 
     def __del__(self):
         #print('terminate imu process')
@@ -442,24 +450,42 @@ class BoatIMU(object):
         self.last_imuread = time.monotonic()
         self.frequency.strobe()
   
-        # apply alignment calibration                                       
+        # apply alignment calibration
+        gyro_q = quaternion.rotvecquat(data['gyro'], data['fusionQPose'])
+    
+        data['pitchrate'], data['rollrate'], data['headingrate'] = map(math.degrees, gyro_q)
+        
         aligned = quaternion.multiply(data['fusionQPose'], self.alignmentQ.value)
         aligned = quaternion.normalize(aligned) # floating point precision errors
     
         data['roll'], data['pitch'], data['heading'] = map(math.degrees, quaternion.toeuler(aligned))
+#----------------------------------
+        try:
+            if(self.sock):
+                print('found SOCK')
+                data2 = self.sock.recv(2048)
+        #print(data2)
+                d2=data2.splitlines()
+                if(len(data2) > 2040):
+                    print('DataLen too big!')
+                for i in d2:
+                    if('HDG' in str(i)):
+                        cont=str(i).split(',')
+                        self.valhdm=float(cont[1])
+                    if('ROT' in str(i)):
+                        cont=str(i).split(',')
+                        self.valrot=float(cont[1])
+
+                data['heading']=self.valhdm
+                data['headingrate']=self.valrot/60
+        
+                print('ValHDM:',data['heading'])
+                print('ValROT:',data['headingrate'])
+        except:
+            pass
+#----------------------------------
         if data['heading'] < 0:
             data['heading'] += 360
-
-        gyro_q = quaternion.rotvecquat(data['gyro'], data['fusionQPose'])
-
-        # optimized below
-        #gyro_q = quaternion.rotvecquat(gyro_q, quaternion.angvec2quat(-math.radians(data['heading']), [0, 0, 1]))
-        ur, vr, data['headingrate'] = map(math.degrees, gyro_q)
-        rh = math.radians(data['heading'])
-        srh = math.sin(rh)
-        crh = math.cos(rh)
-        data['rollrate'] = ur*crh + vr*srh
-        data['pitchrate'] = vr*crh - ur*srh
   
         dt = data['timestamp'] - self.lasttimestamp
         self.lasttimestamp = data['timestamp']
@@ -559,6 +585,7 @@ def main():
                 printline('pitch', data['pitch'], 'roll', data['roll'], 'heading', data['heading'])
                 lastprint = t0
         boatimu.poll()
+        #print('data:',data['heading'])
         while True:
             dt = 1/boatimu.rate.value - (time.monotonic() - t0)
             if dt < 0:

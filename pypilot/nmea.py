@@ -23,7 +23,6 @@
 DEFAULT_PORT = 20220
 
 import sys, select, time, socket
-
 import multiprocessing
 import serial
 from client import pypilotClient
@@ -51,7 +50,7 @@ def check_nmea_cksum(line):
     except:
         return False
 
-gps_timeoffset = 0
+    
 def parse_nmea_gps(line):
     def degrees_minutes_to_decimal(n):
         n/=100
@@ -68,22 +67,7 @@ def parse_nmea_gps(line):
             return False
         gps = {}
 
-        try: # since we are given only time and not date, use current day
-            ts = time.mktime(time.strptime(data[0], '%H%M%S.%f'))
-            t0 = time.time()
-            global gps_timeoffset
-            ts += gps_timeoffset # seconds since 1970
-            sec_in_day = 86400
-            if ts > t0 or ts < t0 - sec_in_day: # wrong day
-                ts -= gps_timeoffset # undo offset
-                day = int(t0/sec_in_day)
-                gps_timeoffset = sec_in_day*sec_in_day
-                if ts + gps_timeoffset > t0:
-                    gps_timeoffset -= sec_in_day
-                ts += gps_timeoffset
-                print('reset gps timeoffset', day)
-        except:
-            ts = time.time()
+        timestamp = float(data[0])
 
         lat = degrees_minutes_to_decimal(float(data[2]))
         if data[3] == 'S':
@@ -94,7 +78,7 @@ def parse_nmea_gps(line):
             lon = -lon
 
         speed = float(data[6]) if data[6] else 0
-        gps = {'timestamp': ts, 'speed': speed, 'lat': lat, 'lon': lon}
+        gps = {'timestamp': timestamp, 'speed': speed, 'lat': lat, 'lon': lon}
         if data[7]:
             gps['track'] = float(data[7])
 
@@ -204,60 +188,7 @@ def parse_nmea_apb(line):
         print(_('exception parsing apb'), e, line)
         return False
 
-
-# waterspeed
-def parse_nmea_water(line):
-    '''
-   ** VHW - Water speed and heading
-   **
-   **        1   2 3   4 5   6 7   8 9
-   **        |   | |   | |   | |   | |
-   ** $--VHW,x.x,T,x.x,M,x.x,N,x.x,K*hh<CR><LF>
-   **
-   ** Field Number:
-   **  1) Degress True
-   **  2) T = True
-   **  3) Degrees Magnetic
-   **  4) M = Magnetic
-   **  5) Knots (speed of vessel relative to the water)
-   **  6) N = Knots
-   **  7) Kilometers (speed of vessel relative to the water)
-   **  8) K = Kilometers
-   **  9) Checksum
-
-   ** LWY - Nautical Leeway Angle Measurement
-   **
-   **        1 2   3
-   **        | |   |
-   ** $--LWY,A,x.x*hh<CR><LF>
-   **
-   ** Field Number:
-   **  1) A=Valid V=not valid
-   **  2) Nautical Leeway Angle in degrees (positive indicates slippage to starboard)
-   **  3) Checksum
-    '''
-    if line[3:6] == 'VHW':
-        try:
-            # for now only use the knots field
-            data = line.split(',')
-            speed = float(data[5])
-            return 'water', {'speed': speed}
-        except Exception as e:
-            print(_('exception parsing vhw'), e, line)
-
-    elif line[3:6] == 'LWY':
-        try:
-            # for now only use the knots field
-            data = line.split(',')
-            if data[1] == 'A':
-                leeway = float(data[2])
-                return 'water', {'leeway': leeway}
-        except Exception as e:
-            print(_('exception parsing vhw'), e, line)
-        
-    return False
-
-nmea_parsers = {'gps': parse_nmea_gps, 'wind': parse_nmea_wind, 'rudder': parse_nmea_rudder, 'apb': parse_nmea_apb, 'water': parse_nmea_water}
+nmea_parsers = {'gps': parse_nmea_gps, 'wind': parse_nmea_wind, 'rudder': parse_nmea_rudder, 'apb': parse_nmea_apb}
 
 from pypilot.linebuffer import linebuffer
 class NMEASerialDevice(object):
@@ -356,7 +287,7 @@ class Nmea(object):
             nmea_name = line[:6]
             # we output mwv and rsa messages after calibration
             # do not relay apb messages
-            if not nmea_name[3:] in ['MWV', 'RSA', 'APB']: #, 'RMC']:
+            if not nmea_name[3:] in ['MWV', 'RSA', 'APB']:
                 # do not output nmea data over tcp faster than 4hz
                 # for each message time
                 # forward nmea lines from serial to tcp
@@ -450,26 +381,21 @@ class Nmea(object):
                 self.send_nmea('APXDR,A,%.3f,D,PTCH' % values['imu.pitch'].value)
                 self.send_nmea('APXDR,A,%.3f,D,ROLL' % values['imu.roll'].value)
                 self.send_nmea('APHDM,%.3f,M' % values['imu.heading_lowpass'].value)
-                self.send_nmea('APROT,%.3f,A' % values['imu.headingrate_lowpass'].value)
                 self.last_imu_time = time.monotonic()
 
+            # should we output gps?  for now no
             # limit to 4hz output of wind and rudder
             t = time.monotonic()
-            for name in ['wind', 'rudder', 'gps']:
-                dt = t - self.nmea_times[name] if name in self.nmea_times else t
-                freq = 1/dt
+            for name in ['wind', 'rudder']:
+                dt = t - self.nmea_times[name] if name in self.nmea_times else 1
                 source = self.sensors.sensors[name].source.value
-                rate = self.sensors.sensors[name].rate.value
                 # only output to tcp if we have a better source
-                if freq < rate and source_priority[source] < source_priority['tcp']:
+                if dt > .25 and source_priority[source] < source_priority['tcp']:
                     if name == 'wind':
                         wind = self.sensors.wind
                         self.send_nmea('APMWV,%.3f,R,%.3f,N,A' % (wind.direction.value, wind.speed.value))
                     elif name == 'rudder':
                         self.send_nmea('APRSA,%.3f,A,,' % self.sensors.rudder.angle.value)
-                    # too slow?  make more tests!
-                    #elif name == 'gps':
-                    #   self.send_nmea(self.sensors.gps.getnmea())
                     self.nmea_times[name] = t
             
         t5 = time.monotonic()
@@ -563,7 +489,7 @@ class nmeaBridge(object):
 
         self.client_socket_nmea_address = False
         self.nmea_client_connect_time = 0
-        self.last_values = {'gps.source' : 'none', 'wind.source' : 'none', 'rudder.source': 'none', 'apb.source': 'none', 'water.source': 'none'}
+        self.last_values = {'gps.source' : 'none', 'wind.source' : 'none', 'rudder.source': 'none', 'apb.source': 'none'}
         for name in self.last_values:
             self.client.watch(name)
         self.addresses = {}

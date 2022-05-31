@@ -13,9 +13,11 @@ from servo import *
 from pypilot.arduino_servo.raspi_motor import *
 from pypilot.arduino_servo.myeeprom import *
 from cmath import nan
-
-
-
+from server import pypilotServer
+from client import pypilotClient
+from pypilot.arduino_servo.crc import *
+from pylint.extensions.check_elif import ElseifUsedChecker
+#from meld.vc._vc import call_temp_output
 #TODO servo funktioniert nur negativ!!
 #TODO Timeout handling,  // test fault pins,     // test current   2000sps @ 8mhz     // test voltage , // test over temp, test rudder
 
@@ -51,13 +53,17 @@ class RaspberryServo:
 # STATIC VARIABLES
     lastaddr=0
     lastvalue=0
+    in_buf=[]
+    packet_count=0
     def __init__(self):
-
-        self.motor = RaspberryMotor()
+        self.server = pypilotServer()
+        self.client = pypilotClient(self.server)
+        self.motor = RaspberryMotor(self.server)
         self.eeprom = myeeprom()
-
         self.max_current_value = 0
         self.voltage = self.current = False
+        self.receivebuf=RaspberryMotor.sendbuf
+        self.sendbuf=RaspberryMotor.receivebuf
 
         self.pollcount=0
 
@@ -98,6 +104,7 @@ class RaspberryServo:
         ##print('RaspberryServo _init_')
         self.in_sync_count = 0;
         self.out_sync = 0;
+        self.in_buf=[]
         self.in_buf_len = 0;
         self.max_current = 0;
         self.params_set = 0;
@@ -106,6 +113,31 @@ class RaspberryServo:
         self.nosync_count = 0;
         self.nosync_data = 0;
         self.eeprom_read = 0;
+        #// force unsync
+        #self.fd_servo=servo_serial_data
+        reset_code = [0xF1, 0xF2, 0xF3, 0xF4];
+        self.serial_write4(self.sendbuf, reset_code, len(reset_code));
+        self.in_buf=[]
+        #c = servo_serial_data.read(self.in_buf, 4);
+        test=99
+
+    def serial_read4(self,buffer):
+            count = 1
+            if len(buffer)>0:
+                a=buffer.pop(0)
+                return a
+            else:
+                return -1
+            return a
+    def serial_write4(self,buffer,data,l):
+        for i in range(l):
+            a=len(buffer)
+            if(l == 1):
+                buffer.append(data)
+            else:
+                buffer.append(data[i])
+        return i
+        
 
 
     def command(self, command): # aus cpp
@@ -117,13 +149,19 @@ class RaspberryServo:
 
     def process_packet(self,in_buf):
         #print('RaspberryServo process_packet (',self.pollcount, ')')
+        if(self.packet_count < 255):
+            self.packet_count+=1;
+        value = in_buf[1] + (in_buf[2]<<8);
+        code=in_buf[0]
+
+
         
-        self.flags |= ServoFlags.SYNC
-        code,value = self.motor.ret_val(self.pollcount)  # von RaspiMotor einlesen,  read only 1 parameter at a time
+        #self.flags |= ServoFlags.SYNC
+        #code,value = self.motor.ret_val(self.pollcount)  # von RaspiMotor einlesen,  read only 1 parameter at a time
         #print('RaspberryServo process_packet(',self.pollcount,'),code=',ret.code,' value=',ret.value)
-        self.pollcount+=1
-        if(self.pollcount>42):
-            self.pollcount=0
+        #self.pollcount+=1
+        #if(self.pollcount>42):
+         #   self.pollcount=0
         #print('RaspberryServo process_packet ret= ',ret)
 #if(packet_count < 255)
  #       packet_count++;
@@ -215,6 +253,15 @@ class RaspberryServo:
                 pass
         return 0;
 
+    def read_serial(self,buffer,in_buf,count):
+            l=min(len(buffer), count)
+            for i in range(l):
+                a=buffer[0]
+                in_buf.append(a)
+                buffer.pop(0)
+            return l
+
+
     def poll(self):
         #print("RaspberryServo poll\n");
         self.flags |= ServoFlags.SYNC
@@ -232,9 +279,52 @@ class RaspberryServo:
             self.nosync_count = 0;
             self.nosync_data = 0;
 
+        if(self.in_buf_len < 4):
+            while True:
+                cnt = 255 - self.in_buf_len;#cnt = len(self.in_buf) - self.in_buf_len;
+                #c = self.fd.read(self.in_buf + self.in_buf_len, cnt);
+                #self.servo_serial.write(reset_code, len(reset_code));
+
+                c=self.serial_read4(self.receivebuf)
+                #c = self.read_serial(self.servo_motor.buffer, self.in_buf,cnt)
+                if(c < cnt):
+                    break;
+                self.in_buf_len = 0;
+                printf("arduino servo buffer overflow\n");
+            if(c<0): 
+            #if(errno != EAGAIN)
+             #   return -1;
+                c = 0;
+       
+            self.in_buf_len += c;
+            if(self.in_buf_len < 4):
+                return 0;
+
+
+        
         ret=0
-        a=self.process_packet(self.pollcount);
-        ret |= a;
+#        a=self.process_packet(self.pollcount);
+#        ret |= a;
+
+        while(self.in_buf_len >= 4):
+        #uint8_t crc = crc8(in_buf, 3);
+        #if(crc == in_buf[3]) { // valid packet
+            if(self.in_sync_count >= 0):#2):
+                ret |= self.process_packet(self.in_buf);
+            else:
+                self.in_sync_count+=1
+            self.in_buf_len-=4;
+            for i in range(self.in_buf_len):
+                self.in_buf[i] = self.in_buf[i+4];
+        #} else {
+         #   // invalid packet, shift by 1 byte
+         #   in_sync_count = 0;
+         #   in_buf_len--;
+         #   for(int i=0; i<in_buf_len; i++)
+         #       in_buf[i] = in_buf[i+1];
+
+
+
 
 
         if (self.flags & ServoFlags.SYNC):
@@ -332,8 +422,14 @@ class RaspberryServo:
 
         self.params_set = 1
 
-    def send_value(self, code, value):   
-            self.motor.process_packet(code, value)
+    def send_value(self, command, value):   
+        code = [command, int(value)&0xff, (int(value)>>8) & 0xff, 0];
+        code[3] = crc8(code, 3);
+        self.serial_write4(self.sendbuf,code, 4);
+
+        #self.servo_serial.write(self.servo_serial, code, 4);
+        
+        #self.motor.process_packet(code, value)
 
 
         
