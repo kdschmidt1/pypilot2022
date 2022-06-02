@@ -21,16 +21,15 @@ class EEPROM24Cxx():
 
     def read_byte(self,addr):
         # Lesen eines Bytes aus dem EEPROM
-       # print("Read_Byte von Adresse ",addr)
-        #self._bus.write_byte_data(self._addr, addr//256, addr%256)
-        #return self._bus.read_byte(self._addr)
-        return 0xff
+       #print("Read_Byte von Adresse ",addr)
+       self._bus.write_byte_data(self._addr, addr//256, addr%256)
+       return self._bus.read_byte(self._addr)
 
     def write_byte(self, addr, byte):
-        #print("Write_Byte ",byte," an Adresse ",addr)
+        print("Write_Byte ",byte," an Adresse ",addr)
         # Schreiben eines Bytes in das EEPROM
         data = [addr%256, byte]
-        #self._bus.write_i2c_block_data(self._addr, addr//256, data)
+        self._bus.write_i2c_block_data(self._addr, addr//256, data)
         #self._bus.write_byte(self._addr,0x99)
         time.sleep(0.015) # data sheet says 10 msec max
 
@@ -77,20 +76,20 @@ class myeeprom:
         self.arduino['signature']=-1        
         #self.members = self.eeprom.arduino['members=[attr for attr in dir(eeprom.arduino_servo_data()) if not callable(getattr(eeprom.arduino_servo_data(),attr)) and not attr.startswith("__")]
 
-        self.verified=[ (False)for x in range(len(self.local)) ]
+        self.verified=[ (False)for x in range(2*len(self.local)) ]#wg 2Byte / Eintrag
         #for x in range(len(self.eeprom.arduino)):
             #self.verified.append(False)
     def eeprom_update_byte(self, addr, value):
         #print("eeprom_update_byte", addr, hex(value))
         self.eeprom24cxx.write_byte(addr, value)
-    def eeprom_update_word(addr, value):
+    def eeprom_update_word(self, addr, value):
         #print("eeprom_update_word", addr, hex(value))
-        self.eeprom24cxx.write_byte(self,addr, (value&0Xff00)>>8)
-        self.eeprom24cxx.write_byte(self,addr+1, (value&0Xff))
+        self.eeprom24cxx.write_byte(addr, (value&0Xff00)>>8)
+        self.eeprom24cxx.write_byte(addr+1, (value&0Xff))
     def eeprom_read_byte(self, addr):
         return self.eeprom24cxx.read_byte(addr)
     def eeprom_read_word(self, addr):
-        value=self.eeprom24cxx.read_byte(addr+1)
+        value=self.eeprom24cxx.read_byte(addr)
         value <<=8
         value+=self.eeprom24cxx.read_byte(addr+1)
         return(value)
@@ -118,18 +117,16 @@ class myeeprom:
 
 #    uint8_t *l = (uint8_t*)&self.local, *a = (uint8_t*)&self.arduino;
     #int ls = sizeof self.local;
-        
         k=0
         for i,v in self.local.items():
-            if( self.local[i] != self.arduino[i]):
-                if self.verified[k]:  
-                    #k &= ~1;    # // always even
-                    self.verified[k] = 0;    # // read this byte again
-                    #self.verified[k+1] = 0; #// read this byte again
+            if( self.local[i] != self.arduino[i] and self.verified[k]):
+                k&=~1; #// always even
+                self.verified[k] = 0;    # // read this byte again
+                self.verified[k+1] = 0; #// read this byte again
                 #print('self-need_write2 returns ',k)
                    # print('self-need_write ',k)
-                    return k;
-            k += 1
+                return k;
+            k+=2
       #  print('self-need_write ',-1)
         return -1;
 
@@ -155,7 +152,7 @@ class myeeprom:
     #// This is invalid data and is also the initial self value
         #print('self self.verified ',self.verified)
         #print('Initial self.self.arduino:',self.self.arduino)
-        for i,v in self.self.arduino.items():
+        for i,v in self.arduino.items():
             #print('Initial i,v:',i,v)
             if(v == 0xff):
                 #print("self SIGNATURE invalid byte %d\n", i);
@@ -165,7 +162,7 @@ class myeeprom:
         return True;
     
     def value(self,addr, val):  # 1byte-Wert
-        if(addr >= len(self.local)):
+        if(addr >= len(self.verified)):
             return;
         if addr%2:
             #ungerade--> Highbyte
@@ -299,7 +296,7 @@ class myeeprom:
 
 
     def set_clutch_pwm(self, pwm):
-        self.local['clutch_pwm'] = pwm*2.54;
+        self.local['clutch_pwm'] = int(pwm*2.54);
 
     def tobase255(self,x):
         #// max value is 65024, and 0xff is forbidden in either byte

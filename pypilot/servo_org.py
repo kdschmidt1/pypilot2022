@@ -6,13 +6,15 @@
 # modify it under the terms of the GNU General Public
 # License as published by the Free Software Foundation; either
 # version 3 of the License, or (at your option) any later version.  
-SERVOTIMEOUT=3600
+
 import os, math, sys, time
 #import select, serial
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from values import *
+TIMEOUTSERVO=3600
+
 #import serialprobe
 
 
@@ -551,7 +553,7 @@ class Servo(object):
                 elif command:
                     if self.driver_timeout_start:
                         if time.monotonic() - self.driver_timeout_start > 1:
-                            print('SERVO: Driver Timeout set')
+                            print('SERVO: Driver Timeout set',time.monotonic() - self.driver_timeout_start)
                             self.flags.setbit(ServoFlags.DRIVER_TIMEOUT)
                     else:
                         self.driver_timeout_start = time.monotonic()
@@ -607,7 +609,7 @@ class Servo(object):
     def poll(self):
         #print('Poll ',time.monotonic())
         if not self.driver:
-                from pypilot.arduino_servo.raspberry_servo_pythonx import RaspberryServo
+                from pypilot.arduino_servo.raspberry_servo_python2 import RaspberryServo
 
                 self.driver = RaspberryServo()
                 self.send_driver_params()
@@ -626,19 +628,19 @@ class Servo(object):
         t = time.monotonic()
         if result == 0:
             d = t - self.lastpolltime
-            if d > SERVOTIMEOUT: #4
+            if d > TIMEOUTSERVO:
                 print('SERVO: servo timeout:', d)
                 self.close_driver()
         else:
             self.lastpolltime = t
 
             #print('???')
-            #if self.controller.value == 'none':
+            if self.controller.value == 'none':
              #   device_path = [self.device.port, self.device.baudrate]
               #  print('raspberry servo ' + _('found'), device_path)
                # serialprobe.success('servo', device_path)
-                #self.controller.set('raspberry')
-                #self.driver.disengage()
+                self.controller.set('raspberry')
+                self.driver.disengage()
 
 
         if result & ServoTelemetry.VOLTAGE:
@@ -759,7 +761,8 @@ class Servo(object):
     def load_calibration(self):
         import pyjson
         try:
-            filename = Servo.calibration_filename
+            filename =Servo.calibration_filename
+            
             print(_('loading servo calibration'), filename)
             file = open(filename)
             self.calibration.set(pyjson.loads(file.readline()))

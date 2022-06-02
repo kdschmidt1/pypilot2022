@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#KDS
+#
 #   Copyright (C) 2021 Sean D'Epagnier
 #
 # This Program is free software; you can redistribute it and/or
@@ -10,7 +10,10 @@
 # autopilot base handles reading from the imu (boatimu)
 
 import sys, os, math, time
-import pydevd;pydevd.settrace('192.168.2.35',port=5678)
+try:
+    import pydevd;pydevd.settrace('192.168.2.35',port=5678)
+except:
+    pass
 
 print('autopilot start', time.monotonic())
 
@@ -21,7 +24,7 @@ from server import pypilotServer
 from client import pypilotClient
 from values import *
 from boatimu import *
-#from pypilot.arduino_servo.BoatRaspiMotorx import *
+from pypilot.arduino_servo.BoatRaspiMotorx import *
 from resolv import *
 import tacking, servo
 from version import strversion
@@ -184,7 +187,7 @@ class Autopilot(object):
 
             if signal_number != 'atexit': # don't get this signal again
                 signal.signal(signal_number, signal.SIG_IGN)
-
+            #tltl.stop()
             while self.childprocesses:
                 process = self.childprocesses.pop().process
                 if process:
@@ -348,7 +351,7 @@ class Autopilot(object):
             print(_('sensors is running too _slowly_'), t2-t1)
 
         sp = 0
-        for tries in range(28): # try 14 times to read from imu
+        for tries in range(14): # try 14 times to read from imu
             timu = time.monotonic()
             data = self.boatimu.read()
             if data:
@@ -358,7 +361,7 @@ class Autopilot(object):
             time.sleep(pd10)
 
             #if not data:
-             #   print('autopilot failed to read imu at time:', time.monotonic(), period)
+            #print('autopilot failed to read imu at time:', time.monotonic(), period)
 
         t3 = time.monotonic()
         if t3-t2 > period/2 and data:

@@ -7,30 +7,6 @@
 
 
 #// This structure is stored in eeprom memory
-import smbus
-import time
-
-class EEPROM24Cxx():
-    # Init I2C
-    # abhaengig von der Jumperstellung kann das EEPROM auf den
-    # Adressen 0x50 bis 0x57 liegen - ggf. mit i2cdetect ermitteln
-    def __init__(self, twi=1, addr=0x50):
-        self._bus = smbus.SMBus(twi)
-        self._addr = addr
-
-    def read_byte(self,addr):
-        # Lesen eines Bytes aus dem EEPROM
-        self._bus.write_byte_data(self._addr, addr//256, addr%256)
-        return self._bus.read_byte(self._addr)
-
-    def write_byte(self, addr, byte):
-        
-        # Schreiben eines Bytes in das EEPROM
-        data = [addr%256, byte]
-        self._bus.write_i2c_block_data(self._addr, addr//256, data)
-        #self._bus.write_byte(self._addr,0x99)
-        time.sleep(0.015) # data sheet says 10 msec max
-
 
 
 arduino_servo_data={# /*__attribute__(("packed"))*/ {
@@ -60,8 +36,6 @@ arduino_servo_data={# /*__attribute__(("packed"))*/ {
 class eeprom:
     initial_read=False    
     verified=[]
-    self.eeprom24cxx = EEPROM24Cxx(1,0x50)
-
     local = arduino_servo_data; #// local version of servo data
     def __init__(self):
         eeprom.local = arduino_servo_data; #// local version of servo data
@@ -73,20 +47,6 @@ class eeprom:
         eeprom.verified=[(False)for x in range(len(eeprom.local))]
         #for x in range(len(self.eeprom.arduino)):
             #self.verified.append(False)
-    def eeprom_update_byte(self, addr, value):
-        self.eeprom24cxx.write_byte(addr, value)
-    def eeprom_update_word(addr, value):
-        self.eeprom24cxx.write_byte(self,addr, (value&0Xff00)>>8)
-        self.eeprom24cxx.write_byte(self,addr+1, (value&0Xff))
-    def eeprom_read_byte(self, addr):
-        return self.eeprom24cxx.read_byte(addr)
-    def eeprom_read_word(addr):
-        value=self.eeprom24cxx.read_byte(addr+1)
-        value <<=8
-        value+=self.eeprom24cxx.read_byte(addr+1)
-        return(value)
-    
-    
     def need_read(end): # -1 == no-need, all verified
     #int is = sizeof verified;
         for i in range(len(eeprom.verified)):

@@ -10,12 +10,14 @@
 import os, select, time
 from gpiozero import CPUTemperature
 from servo import *
-from pypilot.arduino_servo.raspi_motor import *
-from pypilot.arduino_servo.eeprom import *
+from pypilot.arduino_servo.raspi_motorx import *
+from pypilot.arduino_servo.myeeprom import *
 from cmath import nan
-
-
-
+from server import pypilotServer
+from client import pypilotClient
+from pypilot.arduino_servo.crc import *
+from pylint.extensions.check_elif import ElseifUsedChecker
+#from meld.vc._vc import call_temp_output
 #TODO servo funktioniert nur negativ!!
 #TODO Timeout handling,  // test fault pins,     // test current   2000sps @ 8mhz     // test voltage , // test over temp, test rudder
 
@@ -51,13 +53,17 @@ class RaspberryServo:
 # STATIC VARIABLES
     lastaddr=0
     lastvalue=0
+    in_buf=[]
+    packet_count=0
     def __init__(self):
-
-        self.motor = RaspberryMotor()
-        self.eeprom = eeprom()
-
+        self.server = pypilotServer()
+        self.client = pypilotClient(self.server)
+        self.motor = RaspberryMotor(self.server)
+        self.eeprom = myeeprom()
         self.max_current_value = 0
         self.voltage = self.current = False
+        self.receivebuf=RaspberryMotor.sendbuf
+        self.sendbuf=RaspberryMotor.receivebuf
 
         self.pollcount=0
 
@@ -98,6 +104,7 @@ class RaspberryServo:
         ##print('RaspberryServo _init_')
         self.in_sync_count = 0;
         self.out_sync = 0;
+        self.in_buf=[]
         self.in_buf_len = 0;
         self.max_current = 0;
         self.params_set = 0;
@@ -106,6 +113,31 @@ class RaspberryServo:
         self.nosync_count = 0;
         self.nosync_data = 0;
         self.eeprom_read = 0;
+        #// force unsync
+        #self.fd_servo=servo_serial_data
+        reset_code = [0xF1, 0xF2, 0xF3, 0xF4];
+        self.serial_write4(self.sendbuf, reset_code, len(reset_code));
+        self.in_buf=[]
+        #c = servo_serial_data.read(self.in_buf, 4);
+        test=99
+
+    def serial_read4(self,buffer):
+            count = 1
+            if len(buffer)>0:
+                a=buffer.pop(0)
+                return a
+            else:
+                return -1
+            return a
+    def serial_write4(self,buffer,data,l):
+        for i in range(l):
+            a=len(buffer)
+            if(l == 1):
+                buffer.append(data)
+            else:
+                buffer.append(data[i])
+        return i
+        
 
 
     def command(self, command): # aus cpp
@@ -117,13 +149,23 @@ class RaspberryServo:
 
     def process_packet(self,in_buf):
         #print('RaspberryServo process_packet (',self.pollcount, ')')
+        if(self.packet_count < 255):
+            self.packet_count+=1;
+        value = in_buf[1] + (in_buf[2]<<8);
+        code=in_buf[0]
+        for i in range(4):
+            in_buf.pop(-1)
         
-        self.flags |= ServoFlags.SYNC
-        code,value = self.motor.ret_val(self.pollcount)  # von RaspiMotor einlesen,  read only 1 parameter at a time
+        
+
+
+        
+        #self.flags |= ServoFlags.SYNC
+        #code,value = self.motor.ret_val(self.pollcount)  # von RaspiMotor einlesen,  read only 1 parameter at a time
         #print('RaspberryServo process_packet(',self.pollcount,'),code=',ret.code,' value=',ret.value)
-        self.pollcount+=1
-        if(self.pollcount>42):
-            self.pollcount=0
+        #self.pollcount+=1
+        #if(self.pollcount>42):
+         #   self.pollcount=0
         #print('RaspberryServo process_packet ret= ',ret)
 #if(packet_count < 255)
  #       packet_count++;
@@ -142,7 +184,7 @@ class RaspberryServo:
             return ServoTelemetry.VOLTAGE;
         if(code == results.CONTROLLER_TEMP_CODE):
             self.controller_temp = value;
-            print("servo temp:  ", value);
+            #print("servo temp:  ", value);
             return ServoTelemetry.CONTROLLER_TEMP;
         if(code == results.MOTOR_TEMP_CODE):
             self.motor_temp = value / 100.0;
@@ -163,44 +205,50 @@ class RaspberryServo:
         
         if(code == results.EEPROM_VALUE_CODE):
             #print("RaspberryServo EEPROM value: ", value);
-            self.eeprom_read = 4;
+            if self.eeprom_read<0:
+                self.eeprom_read = 4;
             addr = value&0xff
             val= value >> 8 #in_buf[1], val = in_buf[2];
             #print("RaspberryServo EEPROM_VALUE_CODE addr", addr,'val:',val);
+            if addr <len(list(self.eeprom.arduino)):
+              #  print("self VALUE Verify :",list(self.eeprom.arduino)[addr],val);
+              pass
+            if addr==0:
+                test=69
             if(addr&1):
                 if(addr == RaspberryServo.lastaddr+1):
                     #print('RaspberryServo EEPROM_VALUE_CODE: call eeprom.value(',RaspberryServo.lastaddr,RaspberryServo.lastvalue,')')
-                    eeprom.value(RaspberryServo.lastaddr, RaspberryServo.lastvalue);
-                    eeprom.value(addr, val);
-                else:
-                    RaspberryServo.lastaddr = addr;
-                    RaspberryServo.lastvalue = val;
+                    self.eeprom.value(RaspberryServo.lastaddr, RaspberryServo.lastvalue);
+                    self.eeprom.value(addr, val);
+            else:
+                RaspberryServo.lastaddr = addr;
+                RaspberryServo.lastvalue = val;
             #print("RaspberryServo EEPROM_VALUE_CODE KDS??", addr,'val:',val);
-            eeprom.value(addr, val);    
+            self.eeprom.initial()
 
         #// only report eeprom on initial read for all data
-            if(self.eeprom.initial()):
-                self.max_current = eeprom.get_max_current();
-                self.max_controller_temp = eeprom.get_max_controller_temp();
-                self.max_motor_temp = eeprom.get_max_motor_temp();
-                self.rudder_range = eeprom.get_rudder_range();
-                self.rudder_offset = eeprom.get_rudder_offset();
-                self.rudder_scale = eeprom.get_rudder_scale();
-                self.rudder_nonlinearity = eeprom.get_rudder_nonlinearity();
-                self.max_slew_speed = eeprom.get_max_slew_speed();
-                self.max_slew_slow = eeprom.get_max_slew_slow();
-                self.current_factor = eeprom.get_current_factor();
-                self.current_offset = eeprom.get_current_offset();
-                self.voltage_factor = eeprom.get_voltage_factor();
-                self.voltage_offset = eeprom.get_voltage_offset();
-                self.min_speed = eeprom.get_min_speed();
-                self.max_speed = eeprom.get_max_speed();
-                self.gain = eeprom.get_gain();
-                self.clutch_pwm = eeprom.get_clutch_pwm();
+            if(self.eeprom.initial_read):    #self.eeprom.initial()):
+                self.max_current = self.eeprom.get_max_current();
+                self.max_controller_temp = self.eeprom.get_max_controller_temp();
+                self.max_motor_temp = self.eeprom.get_max_motor_temp();
+                self.rudder_range = self.eeprom.get_rudder_range();
+                self.rudder_offset = self.eeprom.get_rudder_offset();
+                self.rudder_scale = self.eeprom.get_rudder_scale();
+                self.rudder_nonlinearity = self.eeprom.get_rudder_nonlinearity();
+                self.max_slew_speed = self.eeprom.get_max_slew_speed();
+                self.max_slew_slow = self.eeprom.get_max_slew_slow();
+                self.current_factor = self.eeprom.get_current_factor();
+                self.current_offset = self.eeprom.get_current_offset();
+                self.voltage_factor = self.eeprom.get_voltage_factor();
+                self.voltage_offset = self.eeprom.get_voltage_offset();
+                self.min_speed = self.eeprom.get_min_speed();
+                self.max_speed = self.eeprom.get_max_speed();
+                self.gain = self.eeprom.get_gain();
+                self.clutch_pwm = self.eeprom.get_clutch_pwm();
             
-                self.params(60, 0, 1, self.max_current, self.max_controller_temp, self.max_motor_temp, self.rudder_range, self.rudder_offset, self.rudder_scale, self.rudder_nonlinearity, max_slew_speed, self.max_slew_slow, self.current_factor, self.current_offset, self.voltage_factor, self.voltage_offset, self.min_speed, self.max_speed, self.gain, self.clutch_pwm);
+                self.params(60, 0, 1, self.max_current, self.max_controller_temp, self.max_motor_temp, self.rudder_range, self.rudder_offset, self.rudder_scale, self.rudder_nonlinearity, self.max_slew_speed, self.max_slew_slow, self.current_factor, self.current_offset, self.voltage_factor, self.voltage_offset, self.min_speed, self.max_speed, self.gain, self.clutch_pwm);
                 return ServoTelemetry.EEPROM;
-            elif(not eeprom.initial_read):
+            elif(not self.eeprom.initial_read):
                 #// if we got an eeprom value, but did not get the initial read,
                 #// send a lot of disengage commands to speed up communication speed which
                 #    // will complete reading eeprom faster
@@ -210,9 +258,19 @@ class RaspberryServo:
                 pass
         return 0;
 
+    def read_serial(self,buffer,in_buf,count):
+            l=min(len(buffer), count)
+            for i in range(l):
+                a=buffer[0]
+                in_buf.append(a)
+                buffer.pop(0)
+            return l
+
+
     def poll(self):
         #print("RaspberryServo poll\n");
         self.flags |= ServoFlags.SYNC
+        self.flags |= ServoFlags.ENGAGED
        
         if (not(self.flags & ServoFlags.SYNC)): 
             self.disengage();
@@ -227,9 +285,45 @@ class RaspberryServo:
             self.nosync_count = 0;
             self.nosync_data = 0;
 
+        if(self.in_buf_len < 4):
+            cnt = 255 - self.in_buf_len;#cnt = len(self.in_buf) - self.in_buf_len;
+            while self.in_buf_len < 4:
+                #c = self.fd.read(self.in_buf + self.in_buf_len, cnt);
+                #self.servo_serial.write(reset_code, len(reset_code));
+                c=self.serial_read4(self.receivebuf)
+                if(c < 0):
+                    break;
+                else:
+                    self.in_buf.append(c)
+                    self.in_buf_len += 1;
+                #c = self.read_serial(self.servo_motor.buffer, self.in_buf,cnt)
+            #self.in_buf_len += c;
+            if(self.in_buf_len < 4):
+                return 0;
+        
         ret=0
-        a=self.process_packet(99);
-        ret |= a;
+#        a=self.process_packet(self.pollcount);
+#        ret |= a;
+
+        while(self.in_buf_len >= 4):
+        #uint8_t crc = crc8(in_buf, 3);
+        #if(crc == in_buf[3]) { // valid packet
+            if(self.in_sync_count >= 0):#2):
+                ret |= self.process_packet(self.in_buf);
+            else:
+                self.in_sync_count+=1
+            self.in_buf_len-=4;
+            for i in range(self.in_buf_len):
+                self.in_buf[i] = self.in_buf[i+4];
+        #} else {
+         #   // invalid packet, shift by 1 byte
+         #   in_sync_count = 0;
+         #   in_buf_len--;
+         #   for(int i=0; i<in_buf_len; i++)
+         #       in_buf[i] = in_buf[i+1];
+
+
+
 
 
         if (self.flags & ServoFlags.SYNC):
@@ -267,52 +361,52 @@ class RaspberryServo:
         #print("RaspberryServo params:", self.rudder_min,self.rudder_max);
 
         max_current = min(60, max(0, _max_current));
-        eeprom.set_max_current(max_current);
+        self.eeprom.set_max_current(max_current);
 
         max_controller_temp = min(100, max(30, _max_controller_temp));
-        eeprom.set_max_controller_temp(max_controller_temp);
+        self.eeprom.set_max_controller_temp(max_controller_temp);
 
         max_motor_temp = min(100, max(30, _max_motor_temp));
-        eeprom.set_max_motor_temp(max_motor_temp);
+        self.eeprom.set_max_motor_temp(max_motor_temp);
 
         rudder_range = min(120, max(0, _rudder_range));
-        eeprom.set_rudder_range(rudder_range);
+        self.eeprom.set_rudder_range(rudder_range);
 
         rudder_offset = min(500, max(-500, _rudder_offset));
-        eeprom.set_rudder_offset(rudder_offset);
+        self.eeprom.set_rudder_offset(rudder_offset);
 
         rudder_scale = min(4000, max(-4000, _rudder_scale));
-        eeprom.set_rudder_scale(rudder_scale);
+        self.eeprom.set_rudder_scale(rudder_scale);
 
         rudder_nonlinearity = min(4000, max(-4000, _rudder_nonlinearity));
-        eeprom.set_rudder_nonlinearity(rudder_nonlinearity);
+        self.eeprom.set_rudder_nonlinearity(rudder_nonlinearity);
 
         max_slew_speed = min(100, max(0, _max_slew_speed));
         #print('RaspberryServo  MAX_SLEW_CODE _max_slew_speed: ',_max_slew_speed)
 
 
-        eeprom.set_max_slew_speed(max_slew_speed);
+        self.eeprom.set_max_slew_speed(max_slew_speed);
 
         max_slew_slow = min(100, max(0, _max_slew_slow));
-        eeprom.set_max_slew_slow(max_slew_slow);
+        self.eeprom.set_max_slew_slow(max_slew_slow);
 
         current_factor = min(1.2, max(.8, _current_factor));
-        eeprom.set_current_factor(current_factor);
+        self.eeprom.set_current_factor(current_factor);
 
         current_offset = min(1.2, max(-1.2, _current_offset));
-        eeprom.set_current_offset(current_offset);
+        self.eeprom.set_current_offset(current_offset);
 
         voltage_factor = min(1.2, max(.8, _voltage_factor));
-        eeprom.set_voltage_factor(voltage_factor);
+        self.eeprom.set_voltage_factor(voltage_factor);
 
         voltage_offset = min(1.2, max(-1.2, _voltage_offset));
-        eeprom.set_voltage_offset(voltage_offset);
+        self.eeprom.set_voltage_offset(voltage_offset);
 
         min_speed = min(100, max(0, _min_speed));
-        eeprom.set_min_speed(min_speed);
+        self.eeprom.set_min_speed(min_speed);
     
         max_speed = min(100, max(0, _max_speed));
-        eeprom.set_max_speed(max_speed);
+        self.eeprom.set_max_speed(max_speed);
 
         gain = min(10, max(-10, _gain));
         # disallow gain from -.5 to .5
@@ -320,15 +414,21 @@ class RaspberryServo:
             gain = min(gain, -.5);
         else:
             gain = max(gain, .5);
-        eeprom.set_gain(gain);
+        self.eeprom.set_gain(gain);
 
         clutch_pwm = min(100, max(10, _clutch_pwm));
-        eeprom.set_clutch_pwm(clutch_pwm);
+        self.eeprom.set_clutch_pwm(clutch_pwm);
 
         self.params_set = 1
 
-    def send_value(self, code, value):   
-            self.motor.process_packet(code, value)
+    def send_value(self, command, value):   
+        code = [command, int(value)&0xff, (int(value)>>8) & 0xff, 0];
+        code[3] = crc8(code, 3);
+        self.serial_write4(self.sendbuf,code, 4);
+
+        #self.servo_serial.write(self.servo_serial, code, 4);
+        
+        #self.motor.process_packet(code, value)
 
 
         
@@ -342,13 +442,13 @@ class RaspberryServo:
         #print("RaspberryServo send_params",self.out_sync);
 
         if self.out_sync==0 or self.out_sync==8 or self.out_sync==16:
-            self.send_value(CommandCodes.MAX_CURRENT_CODE, eeprom.local['max_current'])
+            self.send_value(CommandCodes.MAX_CURRENT_CODE, self.eeprom.local['max_current'])
         if self.out_sync==4:
-            self.send_value(CommandCodes.MAX_CONTROLLER_TEMP_CODE, eeprom.local['max_controller_temp'])
+            self.send_value(CommandCodes.MAX_CONTROLLER_TEMP_CODE, self.eeprom.local['max_controller_temp'])
         if self.out_sync==6:
-            self.send_value(CommandCodes.MAX_MOTOR_TEMP_CODE, eeprom.local['max_motor_temp'])
+            self.send_value(CommandCodes.MAX_MOTOR_TEMP_CODE, self.eeprom.local['max_motor_temp'])
         if self.out_sync==10:
-            self.send_value(CommandCodes.CLUTCH_PWM_CODE, eeprom.local['clutch_pwm'])
+            self.send_value(CommandCodes.CLUTCH_PWM_CODE, self.eeprom.local['clutch_pwm'])
         if self.out_sync==12:
             #print("RaspberryServo RUDDER_MIN_CODE:", self.rudder_min);   
             self.send_value(CommandCodes.RUDDER_MIN_CODE, (int)((self.rudder_min+0.5)*65472));
@@ -357,13 +457,13 @@ class RaspberryServo:
             self.send_value(CommandCodes.RUDDER_MAX_CODE, (int)((self.rudder_max+0.5)*65472));
             
         if self.out_sync==18:
-            self.send_value(CommandCodes.MAX_SLEW_CODE, eeprom.local['max_slew_slow'] << 8 | eeprom.local['max_slew_speed'])
+            self.send_value(CommandCodes.MAX_SLEW_CODE, self.eeprom.local['max_slew_slow'] << 8 | self.eeprom.local['max_slew_speed'])
         
         if self.out_sync==20:
             #print("RaspberryServo EEPROM_READ1 self.eeprom_read:", self.eeprom_read);
             if(self.eeprom_read == 0): 
                 end=0
-                addr,end = eeprom.need_read(end);
+                addr,end = self.eeprom.need_read(end);
                 if(addr >= 0 and end > addr):
                     #print("RaspberryServo EEPROM_READ2 ", addr, end);
                     self.send_value(CommandCodes.EEPROM_READ_CODE, addr | end<<8);
@@ -371,17 +471,26 @@ class RaspberryServo:
             else:
                 self.eeprom_read-=1;
         if self.out_sync==22:
-            addr = eeprom.need_write();#eeprom.local[i] != eeprom.arduino[i] and  eeprom.verified[k]
+            addr = self.eeprom.need_write();#eeprom.local[i] != eeprom.arduino[i] and  eeprom.verified[k]
             if(addr >= 0):
                 #print("RaspberryServo EEPROM NEED WRITE(",addr,")");
-            #for(unsigned int i=0; i< sizeof eeprom.local; i+=2) {
-             #   printf("%d %x %x\n", i, ((uint8_t*)&eeprom.local)[i], ((uint8_t*)&eeprom.local)[i+1]);
+                i=0
+                keys = list(self.eeprom.local)
+                
+                for key, value in self.eeprom.local.items():
+                    #print(i,key, value)
+                    i+=1
                 
             #//printf("EEPROM_WRITE %d %d %d\n", addr, eeprom.data(addr), eeprom.data(addr+1));
             #// send two packets, always write 16 bits atomically
-                send_value(EEPROM_WRITE_CODE, addr | eeprom.data(addr)<<8);
+                #print("addr",addr,'i',i)
+                testlo=self.eeprom.local[keys[int(addr/2)]]&0xff
+                #print('lowbyte ', hex(testlo))
+                testhi=(self.eeprom.local[keys[int(addr/2)]]>>8)& 0xff
+                #print('highbyte ', hex(testhi))
+                self.send_value(CommandCodes.EEPROM_WRITE_CODE, addr | testlo<<8);
                 addr+=1;
-                send_value(EEPROM_WRITE_CODE, addr | eeprom.data(addr)<<8);
+                self.send_value(CommandCodes.EEPROM_WRITE_CODE, addr | testhi<<8);
         self.out_sync += 1
         if(self.out_sync >= 23):
             self.out_sync = 0;
@@ -397,8 +506,8 @@ class RaspberryServo:
         return 
     def disengage(self):
         ##print('RaspberryServo disengage')
-        self.send_params()
         self.send_value(CommandCodes.DISENGAGE_CODE, 0);
+        self.send_params()
         return
 #???????????????????        
 

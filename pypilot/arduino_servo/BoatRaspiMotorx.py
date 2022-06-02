@@ -59,6 +59,8 @@ class RaspiMotorx(object):
         self.setup()
         while True:
             t0 = time.monotonic()
+            data = self.read()
+
 
             dt = time.monotonic() - t0
             period = 1/self.rate
@@ -86,6 +88,18 @@ class BoatRaspiMotorx(object):
     def register(self, _type, name, *args, **kwargs):
         value = _type(*(['RaspiMotorx.' + name] + list(args)), **kwargs)
         return self.client.register(value)
+
+    def BOATread(self):
+        return self.imu.read()
+
+    def poll(self):
+        if not self.imu.multiprocessing:
+            self.imu.poll()
+
+    def read(self):
+        print('BoatRaspiMotorxRead')
+
+
       
 def main():
     from server import pypilotServer
