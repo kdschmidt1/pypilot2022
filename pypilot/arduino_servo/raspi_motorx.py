@@ -27,6 +27,7 @@ globalself=99
 tltl = Timeloop()
 my_self=66
 xyz=89
+
 #global TiSmeloopRetval
 #TimeloopRetval=9999
 #Timeloop_125=8888
@@ -51,7 +52,7 @@ SHUNT_OHMS = 0.1
 from gpiozero import Button,LED
 from rpi_hardware_pwm import HardwarePWM
 PWM_FREQENCY = 12000
-CLUTCH_DELAY = 5    # sek bis pwm reduziert wird
+CLUTCH_DELAY = 1*50    # sek bis pwm reduziert wird
 
 
 
@@ -125,10 +126,11 @@ class RaspberryMotor:
 
         self.serial_data_timeout=250
         self.reset_gpio=LED(17)
-        self.clutch_gpio=LED(13)
-        self.clutch_on_time=0
-        #self.pwm_clutch = HardwarePWM(1, hz=PWM_FREQENCY)
-        #self.pwm_clutch.start(0)
+        #self.clutch_gpio=LED(13)
+        self.clutch_start_time=0        
+
+        self.pwm_clutch = HardwarePWM(pwm_channel=1, hz=16000)
+        self.pwm_clutch.start(0)
         self.clutch_delay=CLUTCH_DELAY
 
         self.enable_gpio=LED(22)
@@ -136,7 +138,7 @@ class RaspberryMotor:
         
         self.error1_gpio = Button(23)
         self.error2_gpio = Button(24)
-        self.pwm_h_bridge = HardwarePWM(0, hz=PWM_FREQENCY)
+        self.pwm_h_bridge = HardwarePWM(pwm_channel=0, hz=PWM_FREQENCY)
         self.pwm_h_bridge.start(0)
         #self.error1_gpio.when_pressed(self.hb_error(1))
         #self.error2_gpio.when_pressed(self.hb_error(2))
@@ -183,9 +185,8 @@ class RaspberryMotor:
         self.reset_gpio.off()
             
             # 2. CLUTCH aus: GPIO13 auf low setzen GPIO13 PIN 33
-        #self.pwm_clutch.change_duty_cycle(0)
-        self.clutch_gpio.off()
-        self.clutch_on_time=0
+        self.pwm_clutch.change_duty_cycle(0)
+        #self.clutch_gpio.off()
         #print('PWM Clutch auf ',0)
             # 3. ENABLE LED auf Masse legen GPIO22 PIN 15
         self.enable_gpio.on()
@@ -206,6 +207,11 @@ class RaspberryMotor:
         self.xlastvalue=0xff
         self.xlastaddress=255;
 
+        self.paketdiff = 0
+        self.counter=0
+        
+        
+        
         self.t_old=0
         tltl.start()
         #tltl.start()
@@ -281,14 +287,6 @@ class RaspberryMotor:
         if code==199:
             test=99
 
-        #    Testen wie lange clutch engaged ist
-        tt=time.monotonic()-self.clutch_on_time if self.clutch_on_time>0 else 0
-        if tt > self.clutch_delay:
-            pass
-             #print('PWM Clutch auf ',50)
-             #print('PWM Clutch auf ',self.clutch_pwm)
-             #self.pwm_clutch.change_duty_cycle(50)
-        #print('Clutch on: ',ontime)
         
         if code == CommandCodes.REPROGRAM_CODE:
             pass
@@ -394,7 +392,7 @@ class RaspberryMotor:
         #self.lastpos = value;
         #OCR1A = abs((int)value - 1000) * 16 / DIV_CLOCK;
         self.pwm_h_bridge.change_duty_cycle( abs(value - 1000)*0.1)
-        print('Set Hbridge duty-cycle', abs(value - 1000)*100)
+        #print('Set Hbridge duty-cycle', abs(value - 1000)*100)
         # Bereich 0 - 1000
         #print('HOWTO H_BRIDGE_PWM(',(int(value) - 1000)/10,'%) @ ', time.monotonic(),' f=',1/(time.monotonic()-self.lastpositiontime)) # abs!!!!
         if(value > 1040):
@@ -451,8 +449,8 @@ class RaspberryMotor:
         print('H-Bridge Error ', no)
 
     def engage(self):
-        #if self.flags & ServoFlags.ENGAGED:
-         #   return#; // already engaged
+        if self.flags & ServoFlags.ENGAGED:
+            return  #; // already engaged
         #print('RaspberryServo engage')
         
             # 1. RESET auf HIGH setzen GPIO17 PIN11
@@ -460,10 +458,9 @@ class RaspberryMotor:
         #print('reset on')
             
             # 2. CLUTCH auf HIGH setzen GPIO13 PIN 33
-        self.clutch_gpio.on()
-        #self.pwm_clutch.change_duty_cycle(100)
-        #print('PWM Clutch auf ',100)
-        self.clutch_on_time=time.monotonic()
+        #self.clutch_gpio.on()
+        self.pwm_clutch.change_duty_cycle(100)
+        self.clutch_start_time = CLUTCH_DELAY;
         #print('clutch on')
             # 3. ENABLE LED auf !!Masse legen GPIO22 PIN 15
         self.enable_gpio.off()
@@ -474,8 +471,6 @@ class RaspberryMotor:
         #e1.when_pressed(self.hb_error(1))
         #e2.when_pressed(self.hb_error(2))
         self.position(1000);
-        #digitalWrite(clutch_pin, HIGH); // clutch
-        #clutch_start_time = 20;
         self.flags |= ServoFlags.ENGAGED
              
       
@@ -486,16 +481,14 @@ class RaspberryMotor:
         timeout = 30; #// detach in about 62ms
         self.pwm_h_bridge.change_duty_cycle(0)
 
-        #clutch_start_time = 0;
-        #digitalWrite(clutch_pin, LOW); // clutch
                     # 1. RESET auf HIGH setzen GPIO17 PIN11
         self.reset_gpio.off()
             
             # 2. CLUTCH auf HIGH setzen GPIO13 PIN 33
+        self.pwm_clutch.change_duty_cycle(0)
+        #self.clutch_gpio.off()
         #self.pwm_clutch.change_duty_cycle(0)
-        self.clutch_gpio.off()
-        #print('PWM Clutch auf ',0)
-        self.clutch_on_time=0
+        self.clutch_start_time=0
         
             # 3. ENABLE LED auf Masse legen GPIO22 PIN 15
         self.enable_gpio.on()
@@ -552,12 +545,13 @@ class RaspberryMotor:
     #    // 16 bit value for rudder
         #print('RASPIServo TakeRudder TBD')
         #return TakeADC(ServoTelemetry.RUDDER, p) * 4;
-        v= AnalogIn(ads, ADS.P0).voltage /5*65536   # ADC 16bit 0-5V
+        v= AnalogIn(ads, ADS.P0).voltage   # ADC 16bit 0-5V
+        v=v/5*65536
         #v= Timeloop_125
 
         t_abtast=(time.monotonic()-self.oldtime)
         #print(time.monotonic(),' RASPIMotor TakeRudder:',v,' T_ABTAST:',t_abtast)
-        self.v=self.PT_1funk(0.5, t_abtast, self.v, v)
+        self.v=self.PT_1funk(1, t_abtast, self.v, v)
         v=self.v
         self.oldtime = time.monotonic()       
         #print(time.monotonic(),' RASPIMotor TakeRudder:',v,' T_ABTAST:',t_abtast)
@@ -566,12 +560,12 @@ class RaspberryMotor:
             pos = self.rudder_min < self.rudder_max;    
             #print('RASPIMotor TakeRudder min,max:',self.rudder_min,self.rudder_max)
             #print('RASPIServo v,rudder_sense',v,self.rudder_sense)
-            if((pos and v < self.rudder_min) or (not pos and v > self.rudder_min)):
+            if((pos and v < self.rudder_min) or (not pos and v < self.rudder_max)):
                 self.stop_starboard()
                 self.flags |= ServoFlags.MIN_RUDDER_FAULT
             else:
                  self.flags &= ~ServoFlags.MIN_RUDDER_FAULT;
-            if((pos and v > self.rudder_max) or (not pos and v < self.rudder_max)):
+            if((pos and v > self.rudder_max) or (not pos and v > self.rudder_min)):
                 self.stop_port();
                 self.flags |= ServoFlags.MAX_RUDDER_FAULT;
             else:
@@ -672,26 +666,35 @@ class RaspberryMotor:
         #else:
          #   print(_('made Motor process realtime'))
     
-    @tltl.job(interval=timedelta(seconds=0.01))
+    @tltl.job(interval=timedelta(seconds=0.02))
     def loop():
         global xyz
         self=xyz
-        #self.setup()
-        if(True):
-            t_now=time.monotonic()
-            dt=(t_now-self.t_old)
-            if dt>0:
-                print("Motor-Frequenz: ",1/dt)
+        t_now=time.monotonic()
+        dt=(t_now-self.t_old)
+        if dt>0:
+                #print("KD Motor-t_now: ",self.t_old,t_now,dt)
+                #print("KD Motor-Frequenz: ",1/dt)
             #print("sendbuf", len(self.sendbuf),"receivebuf", len(self.receivebuf))
-            self.t_old = t_now
+            pass
+        self.t_old = t_now
             #print("T: ",time.monotonic())
-            i=0
-            value=-1
-            rudder_value = self.TakeRudder(0)
-            
-            #Serial einlesen
-            in_buf=[]
 
+        if(self.clutch_start_time):
+            self.clutch_start_time-=1
+            if(self.clutch_start_time == 0 and self.clutch_pwm < 250):
+                test=22
+                self.pwm_clutch.change_duty_cycle(10)#self.clutch_pwm)
+        
+        
+        if(True):
+            value=-1
+            #self.rudder = self.TakeRudder(0)
+            #self.voltage = self.TakeVolts(0);
+            #self.current=self.TakeAmps(0);            
+            #self.controller_temp=self.TakeTemp(ServoTelemetry.CONTROLLER_TEMP);           
+            #self.motor_temp = self.TakeTemp(ServoTelemetry.MOTOR_TEMP) 
+            in_buf=[]
             #// serial input
             while(len(self.receivebuf)):
                   c = self.serial_read(self.receivebuf);#   uint8_t c = Serial.read();
@@ -701,12 +704,14 @@ class RaspberryMotor:
                   if(self.sync_b < 3):
                       self.in_bytes[self.sync_b] = c;
                       self.sync_b+=1;
+
                   else:
                       d=crc8(self.in_bytes, 3)
                       if(c == d):    
                           if(self.in_sync_count >= 2):   # { // if crc matches, we have a valid packet
-                              #print("process packet:",self.in_bytes)
+                              print("KD3 process packet:",self.in_bytes,len(self.receivebuf))
                               self.process_packet();
+                              self.paketdiff+=1
                           else:
                               self.in_sync_count+=1;
                           self.sync_b = 0;
@@ -719,22 +724,18 @@ class RaspberryMotor:
                           self.in_bytes[1] = self.in_bytes[2];
                           self.in_bytes[2] = c;
                           self.flags |= ServoFlags.INVALID;
-                      break
+                      #break
 
+            #print("KD3 receive after:",len(self.receivebuf))
             code = results.UNKNOWN_CODE;
-
-            if self.out_sync_b==0: 
+            TEST=self.paketdiff
+            if TEST > 0: 
                  #   break;
                 code = results.UNKNOWN_CODE;
                 #//  flags C R V C R ct C R mt flags  C  R  V  C  R EE  C  R mct flags  C  R  V  C  R  EE  C  R rr flags  C  R  V  C  R EE  C  R cc  C  R vc
                 #//  0     1 2 3 4 5  6 7 8  9    10 11 12 13 14 15 16 17 18  19    20 21 22 23 24 25  26 27 28 29    30 31 32 33 34 35 36 37 38 39 40 41 42
-                #switch(out_sync_pos++) {
-                self.out_sync_pos+=1
-                #print("self.out_sync_pos",self.out_sync_pos)
-                
-                i=self.out_sync_pos
                 numlist=[0,10,20,30]
-                if(i in numlist):
+                if(self.counter in numlist):
                     #self.flags=0
                     if(not self.low_current):
                         self.flags |= ServoFlags.CURRENT_RANGE;
@@ -746,32 +747,35 @@ class RaspberryMotor:
                     code = results.FLAGS_CODE;
                     #print("RaspiMotor ret.code:",ret.code,' value:',ret.value)
                 numlist=[1,4,7,11,14,17,21,24,27,31,34,37,40]
-                if(i in numlist):
-                    value = self.current=self.TakeAmps(0);
+                if(self.counter in numlist):
+                    value = self.TakeAmps(0)
                     code = results.CURRENT_CODE
                 numlist=[2,  5,  8,  12,  15,  18,  22,  25,  28,  32,  35,  38,  41]
-                if(i in numlist):
+                if(self.counter in numlist):
                     if(self.rudder_sense == 0):
                         value = self.rudder = 65535   #; // indicate invalid rudder measurement
                     else:
-                        value = self.rudder = rudder_value  #self.TakeRudder(0);
+                        value = self.TakeRudder(0)
                     code = results.RUDDER_SENSE_CODE
+                    #print("KD2 SEND RUDDER: ",value)
+                    if(value>40000):
+                        test=69
                     #print("RaspiMotor ret.code:",results.RUDDER_SENSE_CODE,' value:',value)
                     
                 numlist=[ 3,  13,  23,  33]
-                if(i in numlist):
-                    value = self.voltage = self.TakeVolts(0);
+                if(self.counter in numlist):
+                    value = self.TakeVolts(0)
                     code = results.VOLTAGE_CODE
                 numlist=[6]
-                if(i in numlist):
-                        value = self.controller_temp=self.TakeTemp(ServoTelemetry.CONTROLLER_TEMP);
+                if(self.counter in numlist):
+                        value = self.TakeTemp(ServoTelemetry.CONTROLLER_TEMP);
                         code = results.CONTROLLER_TEMP_CODE
                 numlist=[9]
-                if(i in numlist):
-                        value = self.motor_temp = self.TakeTemp(ServoTelemetry.MOTOR_TEMP)
+                if(self.counter in numlist):
+                        value = self.TakeTemp(ServoTelemetry.MOTOR_TEMP)
                         code = results.MOTOR_TEMP_CODE
                 numlist=[ 16,  26,  36]            
-                if(i in numlist):
+                if(self.counter in numlist):
                     #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 read_addr:',self.eeprom_read_addr,'read_end:', self.eeprom_read_end)
                     if(self.eeprom_read_addr < self.eeprom_read_end):
                         ret,retvalue=self.eeprom_read_8(self.eeprom_read_addr)
@@ -781,39 +785,28 @@ class RaspberryMotor:
                             self.eeprom_read_addr+=1;
                             code = results.EEPROM_VALUE_CODE;
                             value = v
-                            self.out_sync_pos-=1#; // fast eeprom read
+                            #self.out_sync_pos-=1#; // fast eeprom read
                             #print('RASPI_MOTOR EEPROM_VALUE_CODE retval 16,26,36 returns:',hex(v))
                         #self.eeprom_read_addr+=1; #// skip for now
                     else:
-                        return
+                        pass
                     
-                self.crcbytes[0] = int(code)&0xFF;
-                self.crcbytes[1] = int(value)&0xFF;
-                self.crcbytes[2] = int(value)>>8 &0xFF;
-                atest=self.crcbytes[2]<<8+self.crcbytes[1]
-                if atest != value:
-                    atest=-1
+                if code != results.UNKNOWN_CODE:
+                    self.crcbytes[0] = int(code)&0xFF;
+                    self.crcbytes[1] = int(value)&0xFF;
+                    self.crcbytes[2] = int(value)>>8 &0xFF;
+                    atest=(self.crcbytes[2]<<8)+self.crcbytes[1]
+                    if atest != int(value) and int(value) != -1:
+                        atest=-1
+                    self.serial_write2(self.sendbuf, self.crcbytes[0],1)
+                    self.serial_write2(self.sendbuf, self.crcbytes[1],1)
+                    self.serial_write2(self.sendbuf, self.crcbytes[2],1)
+                    #// write crc of sync byte plus bytes transmitted
+                    a=crc8(self.crcbytes, 3)
+                    self.serial_write2(self.sendbuf, crc8(self.crcbytes, 3),1);
+                    #print("KD1 SEND BYTES: ",time.monotonic())
                     
-                    #// write next
-                i+=1
-                print("self.out_sync_pos",self.out_sync_pos)
-                if self.out_sync_pos > 52:
-                    self.out_sync_pos=0
-                self.out_sync_b+=1
-            elif self.out_sync_b==3 :
-                        self.serial_write2(self.sendbuf, self.crcbytes[0],1)
-                        self.serial_write2(self.sendbuf, self.crcbytes[1],1)
-                        self.serial_write2(self.sendbuf, self.crcbytes[2],1)
-                        #// write crc of sync byte plus bytes transmitted
-                        a=crc8(self.crcbytes, 3)
-                        self.serial_write2(self.sendbuf, crc8(self.crcbytes, 3),1);
-                        self.out_sync_b = 0;
-            else:
-                self.out_sync_b+=1
-                        #// match output rate to input rate
-                        #if(self.serialin < 4):
-        
-                        #if True:    #t > 0 and t < period:
-                        #else:
-                         #   print(_('Motor process failed to keep time'), dt, t0, t1, t2, t3)
-            
+                self.paketdiff-=1
+                self.counter+=1
+                if self.counter > 42:
+                    self.counter=0
